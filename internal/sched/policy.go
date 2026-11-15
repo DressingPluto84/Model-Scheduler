@@ -1,6 +1,8 @@
 package sched
 
 import (
+	"fmt"
+
 	"github.com/DressingPluto84/Model-Scheduler/internal/ledger"
 	"github.com/DressingPluto84/Model-Scheduler/internal/rbtree"
 	"github.com/DressingPluto84/Model-Scheduler/internal/tenant"
@@ -9,6 +11,8 @@ import (
 // Env is the scheduler state a policy can read when making decisions.
 type Env struct {
 	Ledger *ledger.Ledger
+	// Model is the model this scheduler serves; vruntime is kept per model.
+	Model Model
 	// Active counts each tenant's requests on this scheduler that are queued,
 	// dispatched or running. A tenant with a positive count is "enqueued" for
 	// the eligibility sums.
@@ -17,11 +21,14 @@ type Env struct {
 	// admitted (and so not yet charged). Policies add it to vruntime so a
 	// tenant cannot fill the dispatch queue before its first charge lands.
 	Pending map[*tenant.Tenant]int64
+	// ActiveTenants counts, per tier, the tenants with a positive Active count.
+	ActiveTenants map[tenant.Tier]int
 }
 
-// EffectiveVRuntime is vruntime plus provisional pending input.
+// EffectiveVRuntime is the tenant's vruntime on this model plus provisional
+// pending input.
 func (e *Env) EffectiveVRuntime(t *tenant.Tenant) float64 {
-	return e.Ledger.VRuntime(t) + float64(e.Pending[t])
+	return e.Ledger.VRuntime(t, e.Model) + float64(e.Pending[t])
 }
 
 // Policy orders queued requests.
@@ -37,15 +44,45 @@ type Policy interface {
 	Len() int
 }
 
-// NewPolicy returns a policy by name ("eevdf" or "fcfs").
-func NewPolicy(name string) (Policy, bool) {
+// UsageObserver is a policy that wants to hear about tokens served (input
+// when a request is admitted, output as it is generated).
+type UsageObserver interface {
+	OnUsage(r *Request, input, output int, env *Env)
+}
+
+// PolicyOptions configures the policies that need it.
+type PolicyOptions struct {
+	// TierShare is how the Tiered policy splits service between tiers:
+	// TierSharePerTenant (default) or TierSharePerTier.
+	TierShare TierShare
+	// DRRTokenQuantum is the DRR quantum in tokens for embed and rerank
+	// (about one full batch). LLM DRR counts requests with a quantum of 1.
+	DRRTokenQuantum int
+}
+
+// Policies lists the policy names NewPolicy accepts.
+var Policies = []string{"fcfs", "eevdf", "tiered", "drr"}
+
+// NewPolicy returns a policy by name for a model's scheduler:
+//
+//	fcfs    first come, first served (baseline)
+//	eevdf   one EEVDF queue over all tenants
+//	tiered  a premium queue and a free queue, each EEVDF over its tenants,
+//	        with service split between them by tier weight
+//	drr     Cohere-style deficit round robin: tiers in priority order, DRR
+//	        between the tenants of a tier, FIFO within a tenant
+func NewPolicy(name string, model Model, opts PolicyOptions) (Policy, error) {
 	switch name {
-	case "eevdf":
-		return NewEEVDF(), true
 	case "fcfs":
-		return NewFCFS(), true
+		return NewFCFS(), nil
+	case "eevdf":
+		return NewEEVDF(), nil
+	case "tiered":
+		return NewTiered(opts.TierShare)
+	case "drr":
+		return NewDRR(model, opts.DRRTokenQuantum), nil
 	}
-	return nil, false
+	return nil, fmt.Errorf("unknown policy %q (want one of %v)", name, Policies)
 }
 
 // --- FCFS -----------------------------------------------------------------

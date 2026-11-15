@@ -59,6 +59,11 @@ type Request struct {
 	OutputLen int
 	Arrival   time.Time
 
+	// Group ties together the parts of one client request that are scheduled
+	// as a unit (the doc-query pairs of a rerank request). nil for a request
+	// that stands alone.
+	Group *Group
+
 	// Payload is the request content a real backend needs (prompt text,
 	// embedding input, or a query-document pair). Simulated GPUs ignore it.
 	Payload any
@@ -86,6 +91,21 @@ type Request struct {
 	Generated int // output tokens produced so far
 	unflushed int // output tokens not yet reported via OnUsage
 	cancelled bool
+}
+
+// Group is a client request split into several scheduler requests (the
+// doc-query pairs of a rerank). Under EEVDF every part shares one deadline,
+// computed from the whole request's input, and once the first part is picked
+// the rest follow it, so the request is scheduled like one job of its full
+// size but still runs as small pairs.
+type Group struct {
+	// InputTokens is the input of every part together.
+	InputTokens int
+
+	deadline    float64
+	deadlineSet bool
+	started     bool
+	queued      []*Request // parts still in the policy's queue, in arrival order
 }
 
 // State returns where the request currently is.

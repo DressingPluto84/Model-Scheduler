@@ -371,12 +371,12 @@ func errorEvent(e *system.Error) llmEvent {
 // --- /v1/usage ----------------------------------------------------------------
 
 type usageResponse struct {
-	Tenant       string  `json:"tenant"`
-	Tier         string  `json:"tier"`
-	VRuntime     float64 `json:"vruntime"`
-	BillingUsed  int64   `json:"billing_used_24h"`
-	BillingLimit int64   `json:"billing_limit_24h"`
-	Inflight     int     `json:"inflight"`
+	Tenant       string             `json:"tenant"`
+	Tier         string             `json:"tier"`
+	VRuntime     map[string]float64 `json:"vruntime"` // per model
+	BillingUsed  int64              `json:"billing_used_24h"`
+	BillingLimit int64              `json:"billing_limit_24h"`
+	Inflight     int                `json:"inflight"`
 }
 
 func (a *API) usage(w http.ResponseWriter, r *http.Request) {
@@ -390,10 +390,13 @@ func (a *API) usage(w http.ResponseWriter, r *http.Request) {
 		l := a.sys.Ledger()
 		resp = &usageResponse{
 			Tenant: t.ID, Tier: string(t.Tier),
-			VRuntime:     l.VRuntime(t),
+			VRuntime:     map[string]float64{},
 			BillingUsed:  l.BillingUsage(t, a.sys.Loop().Now()),
 			BillingLimit: tenant.BillingCap(t.Tier),
 			Inflight:     l.Inflight(t),
+		}
+		for _, m := range tenant.Endpoints {
+			resp.VRuntime[string(m)] = l.VRuntime(t, m)
 		}
 	})
 	if resp == nil {

@@ -53,7 +53,7 @@ func newEnv(t *testing.T, fc fakevllm.Config, tweak func(*Config)) *env {
 
 func (e *env) vruntime() float64 {
 	var v float64
-	e.lp.Do(func() { v = e.sys.Ledger().VRuntime(e.prem) })
+	e.lp.Do(func() { v = e.sys.Ledger().VRuntime(e.prem, tenant.LLM) })
 	return v
 }
 

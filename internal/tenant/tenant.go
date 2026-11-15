@@ -34,13 +34,13 @@ type Tenant struct {
 	Tier Tier   `json:"tier"`
 }
 
-// Weight is the EEVDF weight: 3 for premium, 1 for free.
-func (t *Tenant) Weight() float64 {
-	if t.Tier == Premium {
-		return 3
-	}
-	return 1
-}
+// TierWeights are the EEVDF weights per tier: 3 for premium, 1 for free.
+// Only the ratio between them matters. Benchmarks may change these before a
+// run; nothing else should.
+var TierWeights = map[Tier]float64{Premium: 3, Free: 1}
+
+// Weight is the tenant's EEVDF weight.
+func (t *Tenant) Weight() float64 { return TierWeights[t.Tier] }
 
 // RateLimitPerMinute is the gateway's per-(tenant, endpoint) request limit.
 func RateLimitPerMinute(tier Tier, ep Endpoint) int {

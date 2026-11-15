@@ -1,4 +1,4 @@
-// Command bench runs the same workload under FCFS and EEVDF and prints a
+// Command bench runs the same workload under each scheduling policy and prints a
 // side-by-side comparison, on simulated GPUs (default) or real vLLM servers.
 package main
 
@@ -7,15 +7,19 @@ import (
 	"flag"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/DressingPluto84/Model-Scheduler/internal/bench"
 	"github.com/DressingPluto84/Model-Scheduler/internal/loop"
+	"github.com/DressingPluto84/Model-Scheduler/internal/sched"
 	"github.com/DressingPluto84/Model-Scheduler/internal/system"
+	"github.com/DressingPluto84/Model-Scheduler/internal/tenant"
 	"github.com/DressingPluto84/Model-Scheduler/internal/vllm"
 )
 
 func main() {
+	var pw, fw float64
 	w := bench.DefaultWorkload()
 	flag.DurationVar(&w.Duration, "duration", w.Duration, "run length per policy (wall-clock time with -backend vllm)")
 	flag.IntVar(&w.Premium, "premium", w.Premium, "number of premium tenants")
@@ -29,11 +33,24 @@ func main() {
 	// within minutes and most traffic becomes 429s, which hides the scheduler.
 	billing := flag.Bool("billing", false, "enforce the 24h billing caps")
 	depth := flag.Int("dispatch-depth", system.DefaultConfig().DispatchDepth, "dispatch queue depth")
+	flag.Float64Var(&pw, "premium-weight", tenant.TierWeights[tenant.Premium], "EEVDF weight for premium tenants")
+	flag.Float64Var(&fw, "free-weight", tenant.TierWeights[tenant.Free], "EEVDF weight for free tenants")
+	policies := flag.String("policies", "fcfs,eevdf,tiered,drr", "comma-separated policies to compare: "+strings.Join(sched.Policies, ", "))
+	tierShare := flag.String("tier-share", string(sched.TierSharePerTenant),
+		"tiered policy split between tiers: per-tenant (weight ratio per tenant) or per-tier (weight ratio between whole tiers)")
+	drrQuantum := flag.Int("drr-quantum", 4096, "drr quantum in tokens for embed and rerank (LLM uses 1 request)")
+	resetFactor := flag.Float64("reset-factor", 0,
+		"reset a model's vruntimes when premium:free service per tenant exceeds this × the weight ratio (0 = off)")
+	resetMin := flag.Int64("reset-min-tokens", 20000, "tokens served on a model after a reset before the ratio is checked again")
 	backend := flag.String("backend", "sim", "GPU backend: sim or vllm")
 	drain := flag.Duration("drain", 15*time.Second, "pause between runs on vllm so the GPUs go idle")
 	vcfg := vllm.DefaultConfig()
 	vcfg.AddFlags(flag.CommandLine)
 	flag.Parse()
+	if pw <= 0 || fw <= 0 {
+		log.Fatal("weights must be positive")
+	}
+	tenant.TierWeights[tenant.Premium], tenant.TierWeights[tenant.Free] = pw, fw
 
 	var b bench.Backend
 	switch *backend {
@@ -45,17 +62,20 @@ func main() {
 			defer cancel()
 			return vllm.NewGPUs(ctx, lp, vcfg)
 		}
-		log.Printf("running FCFS then EEVDF for %s each against vLLM", w.Duration)
+		log.Printf("running %s for %s each against vLLM", *policies, w.Duration)
 	default:
 		log.Fatalf("unknown backend %q", *backend)
 	}
 
 	var reports []*bench.Report
-	for _, policy := range []string{"fcfs", "eevdf"} {
+	for _, policy := range strings.Split(*policies, ",") {
+		policy = strings.TrimSpace(policy)
 		cfg := system.DefaultConfig()
 		cfg.Policy = policy
 		cfg.BillingEnabled = *billing
 		cfg.DispatchDepth = *depth
+		cfg.RatioReset = sched.RatioReset{Factor: *resetFactor, MinTokens: *resetMin}
+		cfg.PolicyOptions = sched.PolicyOptions{TierShare: sched.TierShare(*tierShare), DRRTokenQuantum: *drrQuantum}
 		if b.NewGPUs != nil {
 			log.Printf("starting %s run", policy)
 		}

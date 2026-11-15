@@ -192,6 +192,10 @@ func (s *System) Rerank(tenantID string, p RerankParams, done func(RerankResult)
 
 	h := &Handle{sys: s}
 	res := RerankResult{Reason: sched.Completed, Pairs: len(p.DocTokens), Arrival: s.loop.Now()}
+	group := &sched.Group{}
+	for _, d := range p.DocTokens {
+		group.InputTokens += p.QueryTokens + d
+	}
 	remaining := len(p.DocTokens)
 	for i, d := range p.DocTokens {
 		var payload sched.RerankPayload
@@ -199,6 +203,7 @@ func (s *System) Rerank(tenantID string, p RerankParams, done func(RerankResult)
 			payload = sched.RerankPayload{Query: p.Query, Doc: p.Docs[i]}
 		}
 		r := s.newRequest(t, tenant.Rerank, p.QueryTokens+d, payload)
+		r.Group = group
 		r.OnDone = func(rs sched.DoneReason) {
 			switch {
 			case rs == sched.Cancelled:

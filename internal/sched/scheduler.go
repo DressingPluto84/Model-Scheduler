@@ -42,6 +42,10 @@ type Scheduler struct {
 	// served is the weighted service (input + 2 × output) each tenant has
 	// received on this model, used for fairness metrics.
 	served map[*tenant.Tenant]int64
+
+	// ratio tracks premium vs free service for the vruntime reset; see
+	// reset.go.
+	ratio ratioTracker
 }
 
 // New builds a scheduler for model and attaches it to gpu.
@@ -55,14 +59,17 @@ func New(model Model, lp loop.Loop, l *ledger.Ledger, policy Policy, gpu GPU, di
 		ledger: l,
 		policy: policy,
 		env: &Env{
-			Ledger:  l,
-			Active:  make(map[*tenant.Tenant]int),
-			Pending: make(map[*tenant.Tenant]int64),
+			Ledger:        l,
+			Model:         model,
+			Active:        make(map[*tenant.Tenant]int),
+			Pending:       make(map[*tenant.Tenant]int64),
+			ActiveTenants: make(map[tenant.Tier]int),
 		},
 		gpu:           gpu,
 		dispatchDepth: dispatchDepth,
 		served:        make(map[*tenant.Tenant]int64),
 	}
+	s.ratio.reset(s.env.Active)
 	gpu.Attach(s)
 	return s
 }
@@ -83,8 +90,8 @@ func (s *Scheduler) Submit(r *Request) {
 	}
 	now := s.loop.Now()
 	t := r.Tenant
-	waking := s.ledger.IsAway(t, now)
-	s.ledger.Arrive(t, now)
+	waking := s.ledger.IsAway(t, s.model, now)
+	s.ledger.Arrive(t, s.model, now)
 
 	s.seq++
 	r.seq = s.seq
@@ -92,15 +99,23 @@ func (s *Scheduler) Submit(r *Request) {
 		r.Arrival = now
 	}
 	r.state = StateQueued
+	s.ratio.see(t)
 	usage := r.OnUsage
 	r.OnUsage = func(in, out int) {
-		s.served[t] += int64(in) + ledger.OutputWeight*int64(out)
+		amount := int64(in) + ledger.OutputWeight*int64(out)
+		s.served[t] += amount
+		s.ratio.add(t, amount)
+		if o, ok := s.policy.(UsageObserver); ok {
+			o.OnUsage(r, in, out, s.env)
+		}
 		if usage != nil {
 			usage(in, out)
 		}
 	}
 	s.policy.Add(r, s.env, waking)
-	s.env.Active[t]++
+	if s.env.Active[t]++; s.env.Active[t] == 1 {
+		s.env.ActiveTenants[t.Tier]++
+	}
 	s.pump()
 }
 
@@ -158,11 +173,12 @@ func (s *Scheduler) finish(r *Request, reason DoneReason) {
 	t := r.Tenant
 	if s.env.Active[t]--; s.env.Active[t] <= 0 {
 		delete(s.env.Active, t)
+		s.env.ActiveTenants[t.Tier]--
 	}
 	now := s.loop.Now()
-	s.ledger.Depart(t, now)
+	s.ledger.Depart(t, s.model, now)
 	if reason == Cancelled {
-		s.ledger.Disconnect(t)
+		s.ledger.Disconnect(t, s.model)
 	}
 	if r.OnDone != nil {
 		r.OnDone(reason)
@@ -179,6 +195,7 @@ func (s *Scheduler) removePending(r *Request) {
 // pump moves requests from the policy into the dispatch queue and from the
 // head of the dispatch queue onto the GPU until neither can make progress.
 func (s *Scheduler) pump() {
+	s.maybeResetVRuntimes()
 	for {
 		progressed := false
 		for len(s.dispatchQ) < s.dispatchDepth && s.policy.Len() > 0 {
@@ -205,6 +222,8 @@ func (s *Scheduler) pump() {
 
 // Stats is a snapshot of scheduler state.
 type Stats struct {
+	// Resets is how many times the ratio check reset this model's vruntimes.
+	Resets     int
 	Queued     int
 	Dispatched int
 	Active     map[*tenant.Tenant]int
@@ -214,6 +233,7 @@ type Stats struct {
 // Stats returns a copy of the scheduler's current state.
 func (s *Scheduler) Stats() Stats {
 	st := Stats{
+		Resets:     s.ratio.resets,
 		Queued:     s.policy.Len(),
 		Dispatched: len(s.dispatchQ),
 		Active:     make(map[*tenant.Tenant]int, len(s.env.Active)),

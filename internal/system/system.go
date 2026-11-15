@@ -17,8 +17,10 @@ import (
 
 // Config configures the whole system.
 type Config struct {
-	// Policy is the scheduling policy: "eevdf" or "fcfs".
+	// Policy is the scheduling policy: one of sched.Policies.
 	Policy string
+	// PolicyOptions configures the tiered and drr policies.
+	PolicyOptions sched.PolicyOptions
 	// DispatchDepth is the size of each scheduler's dispatch queue.
 	DispatchDepth int
 	// IdleTimeout is how long a tenant with nothing queued or running must be
@@ -32,6 +34,9 @@ type Config struct {
 	RateLimitWindow time.Duration
 	// DefaultMaxTokens is used for LLM requests that don't set max_tokens.
 	DefaultMaxTokens int
+	// RatioReset resets a model's vruntimes when premium's share drifts too
+	// far above the weight ratio. Off when Factor is 0 (the default).
+	RatioReset sched.RatioReset
 
 	LLM    gpu.LLMConfig
 	Embed  gpu.BatchConfig
@@ -43,6 +48,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		Policy:           "eevdf",
+		PolicyOptions:    sched.PolicyOptions{TierShare: sched.TierSharePerTenant, DRRTokenQuantum: 4096},
 		DispatchDepth:    4,
 		IdleTimeout:      30 * time.Second,
 		BillingWindow:    24 * time.Hour,
@@ -136,11 +142,12 @@ func New(lp loop.Loop, tenants *tenant.Registry, cfg Config, gpus GPUs) (*System
 		},
 	}
 	for _, m := range tenant.Endpoints {
-		p, ok := sched.NewPolicy(cfg.Policy)
-		if !ok {
-			return nil, fmt.Errorf("unknown policy %q", cfg.Policy)
+		p, err := sched.NewPolicy(cfg.Policy, m, cfg.PolicyOptions)
+		if err != nil {
+			return nil, err
 		}
 		s.scheds[m] = sched.New(m, lp, s.ledger, p, s.gpus[m], cfg.DispatchDepth)
+		s.scheds[m].SetRatioReset(cfg.RatioReset)
 	}
 	return s, nil
 }
@@ -170,6 +177,6 @@ func (s *System) newRequest(t *tenant.Tenant, m sched.Model, input int, payload 
 	// Services are the source of truth for token counts: the GPU reports
 	// usage to the service, which records it in the ledger the schedulers
 	// read from.
-	r.OnUsage = func(in, out int) { s.ledger.Charge(t, in, out, s.loop.Now()) }
+	r.OnUsage = func(in, out int) { s.ledger.Charge(t, m, in, out, s.loop.Now()) }
 	return r
 }

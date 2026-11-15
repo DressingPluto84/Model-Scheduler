@@ -75,7 +75,7 @@ func TestRequestSizeLimits(t *testing.T) {
 func TestBillingCapRollingWindow(t *testing.T) {
 	sys, lp := newTestSystem(t)
 	free := sys.Tenants().Get("free")
-	sys.Ledger().Charge(free, int(tenant.BillingCap(tenant.Free)), 0, lp.Now())
+	sys.Ledger().Charge(free, tenant.LLM, int(tenant.BillingCap(tenant.Free)), 0, lp.Now())
 
 	_, err := sys.Embed("free", EmbedParams{InputTokens: 10}, nil)
 	if err == nil || err.Status != http.StatusTooManyRequests || err.Code != CodeBillingLimited {
@@ -87,6 +87,7 @@ func TestBillingCapRollingWindow(t *testing.T) {
 	if err.RetryAfter <= 23*time.Hour {
 		t.Fatalf("retry after %v, want about 24h", err.RetryAfter)
 	}
+	// The cap is on the sum over all models: LLM usage blocks embed too.
 	// Premium is unaffected.
 	if _, err := sys.Embed("prem", EmbedParams{InputTokens: 10}, nil); err != nil {
 		t.Fatalf("premium: %v", err)
@@ -107,7 +108,7 @@ func TestLLMStreamAndBatchedAccounting(t *testing.T) {
 		OnToken: func(i int, _ string, _ time.Time) {
 			tokens++
 			if i == 32 {
-				at33 = sys.Ledger().VRuntime(prem)
+				at33 = sys.Ledger().VRuntime(prem, tenant.LLM)
 			}
 		},
 		OnDone: func(d LLMDone) { reason = d.Reason },
@@ -123,7 +124,7 @@ func TestLLMStreamAndBatchedAccounting(t *testing.T) {
 	if at33 != 50+2*32 {
 		t.Fatalf("vruntime at token 33 = %.0f, want %d", at33, 50+2*32)
 	}
-	if got := sys.Ledger().VRuntime(prem); got != 50+2*70 {
+	if got := sys.Ledger().VRuntime(prem, tenant.LLM); got != 50+2*70 {
 		t.Fatalf("final vruntime %.0f, want %d", got, 50+2*70)
 	}
 }
@@ -149,7 +150,7 @@ func TestLLMCancelChargesTokensUsed(t *testing.T) {
 	if reason != sched.Cancelled || generated != 40 {
 		t.Fatalf("reason %v generated %d, want cancelled after 40", reason, generated)
 	}
-	if got := sys.Ledger().VRuntime(prem); got != 50+2*40 {
+	if got := sys.Ledger().VRuntime(prem, tenant.LLM); got != 50+2*40 {
 		t.Fatalf("vruntime %.0f, want %d", got, 50+2*40)
 	}
 	if st := sys.GPUStats(tenant.LLM); st.UsedTokens != 0 {
@@ -181,7 +182,7 @@ func TestRerankCancelDropsUncomputedPairs(t *testing.T) {
 	}
 	// First batch (4 pairs) finished and the second batch (4 pairs) was
 	// already admitted; the remaining 4 pairs were never charged.
-	if got := sys.Ledger().VRuntime(prem); got != 8000 {
+	if got := sys.Ledger().VRuntime(prem, tenant.Rerank); got != 8000 {
 		t.Fatalf("vruntime %.0f, want 8000", got)
 	}
 	if sys.Ledger().Inflight(prem) != 0 {

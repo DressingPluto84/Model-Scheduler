@@ -40,7 +40,7 @@ Only the LLM service streams; it streams tokens via websocket to the clients tha
 Each scheduler runs EEVDF. Input tokens are weighted as 1, and output tokens (if any) are weighted as 2. Weights are based on premium vs. free requests, with w = 3 for premium and w = 1 for free. We use VTC accounting methods for tokens.
 
 ```
-vruntime             = input + 2 × output, for all tokens processed all time
+vruntime             = input + 2 × output, for all tokens processed on this model all time
 virtual time for job = num input tokens (num in pair for rerank) / weight
 used                 = vruntime / weight
 eligible            -> vruntime <= sum of system vruntime × (w_i / sum of all w)
@@ -49,14 +49,27 @@ deadline             = used + num input / weight
 choose smallest deadline of eligible
 ```
 
-- vruntime is global per tenant: it is shared across the embed, rerank, and LLM schedulers.
+- vruntime is tracked per model: each scheduler (embed, rerank, LLM) keeps its own vruntime for each tenant, so heavy use of one model doesn't lower a tenant's priority on the others. Billing still counts the sum over all models.
+- All doc-query pairs of a rerank request share one deadline, computed from the whole request's input tokens (`used + total input / weight`). Once the first pair is picked, the rest of the request's pairs are picked next, so a rerank request is scheduled like one job of its full size but still runs as small pairs.
 - The scheduler queues requests, and each request carries the values from its client that we need to make decisions (vruntime, weight).
 - The deadline uses only input tokens for now.
 - Input tokens are charged when a job is admitted to the GPU. This prevents someone from being charged for a request that never actually ran.
 
 For a given GPU decoding, we batch our writes for VTC accounting, incrementing vruntime in batches of k tokens generated (k could be around 32) until no more tokens are generated, flushing when done (on completion or cancellation).
 
-We will store the requests in an RB tree, as is done in Linux. Clients that return after some time come back at the max of their current vruntime and their minimum eligible value (sum of system vruntime × w_i / sum of all w). A tenant leaves either by not making requests for a while (an idle timeout, defaulting to 30s with nothing queued or running) or by disconnecting and coming back.
+We will store the requests in an RB tree, as is done in Linux. Clients that return after some time come back at the max of their current vruntime and their minimum eligible value (sum of system vruntime × w_i / sum of all w). A tenant leaves a model's scheduler either by not making requests to that model for a while (an idle timeout, defaulting to 30s with nothing queued or running there) or by disconnecting and coming back.
+
+### Tiered queues
+
+With far more tenants than the GPUs can serve, one EEVDF queue over every tenant turns into strict premium priority: almost every tenant is still eligible, so only the deadline decides, and a premium deadline is 3× smaller. To keep the weight ratio in that regime, the `tiered` policy keeps two queues, premium and free, each running EEVDF over its own tenants. The next request comes from the queue whose tier is furthest behind its share, counted in tokens (input when picked, output as it's generated):
+
+```
+pick the non-empty tier with the smallest  tokens served / share
+share (per-tenant, default) = tier weight × active tenants in the tier
+share (per-tier)            = tier weight
+```
+
+Per-tenant keeps premium:free at 3:1 for each tenant (1,500 premium and 3,764 free tenants split 54% / 46%). Per-tier gives the tiers as a whole 75% / 25%. Share uses the active tenant count right now, so the split follows tenants joining and leaving. A tier that was idle comes back level with the other tier instead of catching up, and a rerank request that has started finishes before the scheduler switches tiers.
 
 ### Dispatch queue
 
@@ -94,7 +107,7 @@ If a client disconnects, the rest of the job is aborted off of the GPU, and the 
 
 - Output tokens cost 2x as much as input tokens, since we don't know how many could possibly be generated and want to penalize a client who sends small requests that decode for a long time.
 - Bills are not by token usage; rather, there is a limit set by whether you are free or premium. Premium customers get a higher limit: 86k tokens for premium and 43k tokens for free.
-- Tokens are counted the same way as vruntime (input + 2 × output), but we never augment this metric for awakened clients like we do vruntime.
+- Tokens are counted the same way as vruntime (input + 2 × output), summed over all models, but we never augment this metric for awakened clients like we do vruntime.
 - The limit is for a rolling 24 hour period.
 - Once a tenant is at or over the limit, new requests return a 429 (with a message distinct from the rate-limit 429) until the rolling window moves past the limit. A request already in flight is allowed to finish, even if it pushes usage over the limit.
 
@@ -111,7 +124,7 @@ If a client disconnects, the rest of the job is aborted off of the GPU, and the 
 - Hitting limits for token usage and num requests
 - Hitting limits for request sizes
 - Client comes alive after sleep
-- Benchmark against FCFS. Other schedulers may be added later.
+- Benchmark against FCFS and against deficit round robin as described in Cohere's [serving fairness](https://cohere.com/blog/serving-fairness) post (`drr`): higher tiers are served first, DRR between the tenants of a tier (LLM costs 1 per request with a quantum of 1; embed and rerank cost their input tokens with a quantum of about one batch), and FIFO within a tenant. The post doesn't say whether lower tiers get a guaranteed share, so `drr` uses strict tier priority; under sustained overload that leaves free almost nothing. Open-source schedulers may be added later.
 
 ### Benchmark metrics
 

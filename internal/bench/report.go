@@ -50,7 +50,18 @@ type Report struct {
 	Workload Workload
 	Stats    map[statKey]*Stats
 	GPUBusy  map[tenant.Endpoint]float64 // fraction of wall time the GPU was busy
-	Sleeper  *SleeperStats
+	Resets   map[tenant.Endpoint]int     // vruntime resets per model
+	// Jain is Jain's fairness index of weighted service per model, over the
+	// tenants that sent that model at least one request ("all" combines the
+	// models). 1 means every tenant got exactly its weighted share.
+	Jain map[string]float64
+	// TierRatio is premium tokens per premium tenant / free tokens per free
+	// tenant, per model.
+	TierRatio map[tenant.Endpoint]float64
+
+	senders map[tenant.Endpoint]map[*tenant.Tenant]bool
+	Reset   sched.RatioReset
+	Sleeper *SleeperStats
 
 	// closed is set when the run ends; later events are not recorded.
 	closed bool
@@ -63,7 +74,12 @@ type SleeperStats struct {
 
 func newReport(policy string, w Workload) *Report {
 	r := &Report{Policy: policy, Workload: w, Stats: make(map[statKey]*Stats),
-		GPUBusy: make(map[tenant.Endpoint]float64)}
+		GPUBusy: make(map[tenant.Endpoint]float64), Resets: make(map[tenant.Endpoint]int),
+		Jain: make(map[string]float64), TierRatio: make(map[tenant.Endpoint]float64),
+		senders: make(map[tenant.Endpoint]map[*tenant.Tenant]bool)}
+	for _, m := range tenant.Endpoints {
+		r.senders[m] = make(map[*tenant.Tenant]bool)
+	}
 	for _, m := range tenant.Endpoints {
 		for _, tier := range []tenant.Tier{tenant.Premium, tenant.Free} {
 			r.Stats[statKey{m, tier}] = &Stats{Rejected: make(map[string]int)}
@@ -74,7 +90,10 @@ func newReport(policy string, w Workload) *Report {
 
 func (r *Report) get(k statKey) *Stats { return r.Stats[k] }
 
-func (r *Report) submitted(k statKey) { r.get(k).Submitted++ }
+func (r *Report) submitted(k statKey, t *tenant.Tenant) {
+	r.get(k).Submitted++
+	r.senders[k.Model][t] = true
+}
 
 func (r *Report) rejected(k statKey, err *system.Error) {
 	if err != nil && !r.closed {
@@ -130,15 +149,59 @@ func (r *Report) finish(sys *system.System, all []*tenant.Tenant, dur time.Durat
 			s.ServedTokens += st.Served[t]
 		}
 		r.GPUBusy[m] = float64(sys.GPUStats(m).Busy) / float64(dur)
+		r.Resets[m] = st.Resets
 	}
 	for _, t := range all {
 		for _, m := range tenant.Endpoints {
 			r.get(statKey{m, t.Tier}).Tenants++
 		}
 		if t.ID == "premium-sleeper" {
-			r.Sleeper = &SleeperStats{VRuntime: sys.Ledger().VRuntime(t)}
+			r.Sleeper = &SleeperStats{VRuntime: sys.Ledger().TotalVRuntime(t)}
 		}
 	}
+
+	// Fairness indexes from each tenant's weighted service.
+	served := map[tenant.Endpoint]map[*tenant.Tenant]int64{}
+	for _, m := range tenant.Endpoints {
+		served[m] = sys.Scheduler(m).Stats().Served
+		var xs []float64
+		for t := range r.senders[m] {
+			xs = append(xs, float64(served[m][t])/t.Weight())
+		}
+		r.Jain[string(m)] = jain(xs)
+
+		p, f := r.get(statKey{m, tenant.Premium}), r.get(statKey{m, tenant.Free})
+		if p.Tenants > 0 && f.Tenants > 0 && f.ServedTokens > 0 {
+			r.TierRatio[m] = (float64(p.ServedTokens) / float64(p.Tenants)) / (float64(f.ServedTokens) / float64(f.Tenants))
+		}
+	}
+	var xs []float64
+	for _, t := range all {
+		var sum int64
+		sent := false
+		for _, m := range tenant.Endpoints {
+			sum += served[m][t]
+			sent = sent || r.senders[m][t]
+		}
+		if sent {
+			xs = append(xs, float64(sum)/t.Weight())
+		}
+	}
+	r.Jain["all"] = jain(xs)
+}
+
+// jain is Jain's fairness index: (Σx)² / (n Σx²). It is 1 when every x is
+// equal and 1/n when one tenant gets everything.
+func jain(xs []float64) float64 {
+	var sum, sq float64
+	for _, x := range xs {
+		sum += x
+		sq += x * x
+	}
+	if sq == 0 {
+		return 0
+	}
+	return sum * sum / (float64(len(xs)) * sq)
 }
 
 // --- Lag -------------------------------------------------------------------------
@@ -214,8 +277,14 @@ func Print(out io.Writer, reports ...*Report) {
 	if reports[0].Billing {
 		billing = "on"
 	}
-	fmt.Fprintf(out, "%s on %s GPUs · %d premium + %d free tenants%s · seed %d · billing %s\n",
-		w.Duration, reports[0].Backend, w.Premium, w.Free, sleeper, w.Seed, billing)
+	reset := "off"
+	if rr := reports[0].Reset; rr.Factor > 0 {
+		reset = fmt.Sprintf("above %g:1 (after %d tokens)",
+			rr.Factor*tenant.TierWeights[tenant.Premium]/tenant.TierWeights[tenant.Free], rr.MinTokens)
+	}
+	fmt.Fprintf(out, "%s on %s GPUs · %d premium + %d free tenants%s · weights %g:%g · seed %d · billing %s · vruntime reset %s\n",
+		w.Duration, reports[0].Backend, w.Premium, w.Free, sleeper,
+		tenant.TierWeights[tenant.Premium], tenant.TierWeights[tenant.Free], w.Seed, billing, reset)
 
 	policies := make([]string, len(reports))
 	for i, r := range reports {
@@ -247,11 +316,41 @@ func Print(out io.Writer, reports ...*Report) {
 	}
 	gpu.print(out)
 
+	if reports[0].Reset.Factor > 0 {
+		rt := newTable("Vruntime resets", policies)
+		for _, m := range tenant.Endpoints {
+			rt.row(string(m), reports, func(r *Report) string { return fmt.Sprintf("%d", r.Resets[m]) })
+		}
+		rt.print(out)
+	}
+
 	latency := func(ds []time.Duration) string { return dur(pct(ds, 50)) + " / " + dur(pct(ds, 99)) }
 	perTier("LLM time to first token (p50 / p99)", tenant.LLM, func(s *Stats) string { return latency(s.TTFT) })
 	perTier("LLM inter-token latency (p50 / p99)", tenant.LLM, func(s *Stats) string { return latency(s.ITL) })
 	perTier("Embed latency, end to end (p50 / p99)", tenant.Embed, func(s *Stats) string { return latency(s.E2E) })
 	perTier("Rerank latency, end to end (p50 / p99)", tenant.Rerank, func(s *Stats) string { return latency(s.E2E) })
+
+	jt := newTable("Fairness: Jain's index of weighted service (1 = every tenant got its weighted share)", policies)
+	for _, k := range []string{"embed", "rerank", "llm", "all"} {
+		label := k
+		if k == "all" {
+			label = "all models"
+		}
+		jt.row(label, reports, func(r *Report) string { return fmt.Sprintf("%.3f", r.Jain[k]) })
+	}
+	jt.print(out)
+
+	target := tenant.TierWeights[tenant.Premium] / tenant.TierWeights[tenant.Free]
+	rt := newTable(fmt.Sprintf("Premium:free tokens per tenant (weights say %g)", target), policies)
+	for _, m := range tenant.Endpoints {
+		rt.row(string(m), reports, func(r *Report) string {
+			if r.TierRatio[m] == 0 {
+				return "-"
+			}
+			return fmt.Sprintf("%.2f", r.TierRatio[m])
+		})
+	}
+	rt.print(out)
 
 	perModelTier("Fairness: mean |lag| in tokens (lower is fairer)", func(s *Stats) string {
 		return fmt.Sprintf("%.0f", meanF(s.LagSamples))
