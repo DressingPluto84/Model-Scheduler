@@ -1,0 +1,6 @@
+[
+  {"id": "acme", "tier": "premium"},
+  {"id": "globex", "tier": "premium"},
+  {"id": "initech", "tier": "free"},
+  {"id": "hooli", "tier": "free"}
+]
