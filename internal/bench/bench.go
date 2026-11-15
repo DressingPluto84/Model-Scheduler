@@ -304,7 +304,7 @@ func (g *generator) fire() {
 		if g.asleep() {
 			return
 		}
-		g.rep.submitted(key, t)
+		g.rep.submitted(key)
 		var h *system.Handle
 		h, err := g.sys.Embed(t.ID, system.EmbedParams{Text: g.text(in), InputTokens: in}, func(res system.EmbedResult) {
 			delete(g.run.handles, h)
@@ -329,7 +329,7 @@ func (g *generator) fire() {
 				p.Docs = append(p.Docs, g.text(d))
 			}
 		}
-		g.rep.submitted(key, t)
+		g.rep.submitted(key)
 		var h *system.Handle
 		h, err := g.sys.Rerank(t.ID, p, func(res system.RerankResult) {
 			delete(g.run.handles, h)
@@ -348,7 +348,7 @@ func (g *generator) fire() {
 		if g.asleep() {
 			return
 		}
-		g.rep.submitted(key, t)
+		g.rep.submitted(key)
 		arrival := g.lp.Now()
 		var last time.Time
 		var h *system.Handle
