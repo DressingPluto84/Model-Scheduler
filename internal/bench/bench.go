@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DressingPluto84/Model-Scheduler/internal/sched"
+
 	"github.com/DressingPluto84/Model-Scheduler/internal/loop"
 	"github.com/DressingPluto84/Model-Scheduler/internal/system"
 	"github.com/DressingPluto84/Model-Scheduler/internal/tenant"
@@ -41,6 +43,18 @@ type Workload struct {
 	RerankDocsMax     int
 
 	Seed int64
+
+	// SLO is the latency target a request must meet to count toward goodput.
+	SLO SLO
+}
+
+// SLO is a per-request latency target. An LLM request meets it when its time
+// to first token is within TTFT and its average time per output token after
+// the first is within TPOT; embed and rerank requests when they finish within
+// Embed / Rerank of arriving.
+type SLO struct {
+	TTFT, TPOT    time.Duration
+	Embed, Rerank time.Duration
 }
 
 // DefaultWorkload offers more load than the default simulated GPUs can serve,
@@ -66,6 +80,7 @@ func DefaultWorkload() Workload {
 		RerankDocsMin:     4,
 		RerankDocsMax:     16,
 		Seed:              42,
+		SLO:               SLO{TTFT: 2 * time.Second, TPOT: 100 * time.Millisecond, Embed: 3 * time.Second, Rerank: 2 * time.Second},
 	}
 }
 
@@ -160,7 +175,15 @@ type runState struct {
 	all     []*tenant.Tenant
 	dur     time.Duration
 	end     time.Time
-	handles map[*system.Handle]bool
+	handles map[*system.Handle]*inflight
+}
+
+// inflight is a request that hasn't finished yet, kept so the run's end can
+// tell whether it had already missed its SLO.
+type inflight struct {
+	key        statKey
+	arrival    time.Time
+	firstToken time.Time // LLM only; zero until the first token arrives
 }
 
 func start(lp loop.Loop, reg *tenant.Registry, cfg system.Config, gpus system.GPUs, w Workload,
@@ -171,7 +194,7 @@ func start(lp loop.Loop, reg *tenant.Registry, cfg system.Config, gpus system.GP
 	}
 	begin := lp.Now()
 	run := &runState{sys: sys, rep: rep, all: all, dur: w.Duration, end: begin.Add(w.Duration),
-		handles: make(map[*system.Handle]bool)}
+		handles: make(map[*system.Handle]*inflight)}
 
 	// One independent random stream per (tenant, endpoint), and every request
 	// parameter (including the LLM output length) is drawn at arrival, so
@@ -203,7 +226,31 @@ func start(lp loop.Loop, reg *tenant.Registry, cfg system.Config, gpus system.GP
 }
 
 // stop records the final metrics and cancels everything still in flight.
+//
+// A request still in flight counts as an SLO miss if it has already missed
+// (waited longer than its target for its first token or its result).
+// Otherwise it could still have made it, so it isn't counted either way.
 func (run *runState) stop() {
+	slo := run.rep.Workload.SLO
+	now := run.sys.Loop().Now()
+	for _, f := range run.handles {
+		target := slo.Embed
+		switch f.key.Model {
+		case tenant.Rerank:
+			target = slo.Rerank
+		case tenant.LLM:
+			target = slo.TTFT
+			if !f.firstToken.IsZero() {
+				if f.firstToken.Sub(f.arrival) > target {
+					run.rep.slo(f.key, false)
+				}
+				continue
+			}
+		}
+		if now.Sub(f.arrival) > target {
+			run.rep.slo(f.key, false)
+		}
+	}
 	run.rep.finish(run.sys, run.all, run.dur)
 	run.rep.closed = true
 	for h := range run.handles {
@@ -287,9 +334,19 @@ func (g *generator) text(n int) string {
 	return b.String()
 }
 
-func (g *generator) track(h *system.Handle) {
+func (g *generator) track(h *system.Handle, key statKey) *inflight {
+	f := &inflight{key: key, arrival: g.lp.Now()}
 	if h != nil {
-		g.run.handles[h] = true
+		g.run.handles[h] = f
+	}
+	return f
+}
+
+// e2eSLO records whether a finished embed or rerank request met its target.
+// Requests the client cancelled don't count.
+func (g *generator) e2eSLO(key statKey, reason sched.DoneReason, d, target time.Duration) {
+	if reason != sched.Cancelled {
+		g.rep.slo(key, reason == sched.Completed && d <= target)
 	}
 }
 
@@ -309,8 +366,9 @@ func (g *generator) fire() {
 		h, err := g.sys.Embed(t.ID, system.EmbedParams{Text: g.text(in), InputTokens: in}, func(res system.EmbedResult) {
 			delete(g.run.handles, h)
 			g.rep.e2eDone(key, res.Reason, res.Done.Sub(res.Arrival))
+			g.e2eSLO(key, res.Reason, res.Done.Sub(res.Arrival), g.w.SLO.Embed)
 		})
-		g.track(h)
+		g.track(h, key)
 		g.rep.rejected(key, err)
 
 	case tenant.Rerank:
@@ -334,8 +392,9 @@ func (g *generator) fire() {
 		h, err := g.sys.Rerank(t.ID, p, func(res system.RerankResult) {
 			delete(g.run.handles, h)
 			g.rep.e2eDone(key, res.Reason, res.Done.Sub(res.Arrival))
+			g.e2eSLO(key, res.Reason, res.Done.Sub(res.Arrival), g.w.SLO.Rerank)
 		})
-		g.track(h)
+		g.track(h, key)
 		g.rep.rejected(key, err)
 
 	case tenant.LLM:
@@ -350,13 +409,18 @@ func (g *generator) fire() {
 		}
 		g.rep.submitted(key)
 		arrival := g.lp.Now()
-		var last time.Time
+		var first, last time.Time
+		var f *inflight
 		var h *system.Handle
 		h, err := g.sys.LLM(t.ID,
 			system.LLMParams{Prompt: g.text(in), InputTokens: in, MaxTokens: g.w.LLMMaxTokens, OutputLen: out},
 			system.LLMCallbacks{
 				OnToken: func(i int, _ string, at time.Time) {
 					if i == 0 {
+						first = at
+						if f != nil {
+							f.firstToken = at
+						}
 						g.rep.ttft(key, at.Sub(arrival))
 					} else {
 						g.rep.itl(key, at.Sub(last))
@@ -369,9 +433,19 @@ func (g *generator) fire() {
 				OnDone: func(d system.LLMDone) {
 					delete(g.run.handles, h)
 					g.rep.llmDone(key, d.Reason)
+					switch d.Reason {
+					case sched.Failed:
+						g.rep.slo(key, false)
+					case sched.Completed:
+						met := !first.IsZero() && first.Sub(arrival) <= g.w.SLO.TTFT
+						if d.Generated > 1 {
+							met = met && last.Sub(first)/time.Duration(d.Generated-1) <= g.w.SLO.TPOT
+						}
+						g.rep.slo(key, met)
+					}
 				},
 			})
-		g.track(h)
+		f = g.track(h, key)
 		g.rep.rejected(key, err)
 	}
 }

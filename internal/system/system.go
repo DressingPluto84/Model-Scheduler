@@ -34,6 +34,9 @@ type Config struct {
 	RateLimitWindow time.Duration
 	// DefaultMaxTokens is used for LLM requests that don't set max_tokens.
 	DefaultMaxTokens int
+	// RerankPairs splits each rerank request into one scheduler request per
+	// doc-query pair. Off by default: a rerank request is one job.
+	RerankPairs bool
 	// RatioReset resets a model's vruntimes when premium's share drifts too
 	// far above the weight ratio. Off when Factor is 0 (the default).
 	RatioReset sched.RatioReset

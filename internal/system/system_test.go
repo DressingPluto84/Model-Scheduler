@@ -12,6 +12,11 @@ import (
 
 func newTestSystem(t *testing.T) (*System, *loop.Sim) {
 	t.Helper()
+	return newTestSystemWith(t, DefaultConfig())
+}
+
+func newTestSystemWith(t *testing.T, cfg Config) (*System, *loop.Sim) {
+	t.Helper()
 	lp := loop.NewSim(time.Unix(0, 0))
 	reg, err := tenant.NewRegistry([]*tenant.Tenant{
 		{ID: "prem", Tier: tenant.Premium},
@@ -20,7 +25,7 @@ func newTestSystem(t *testing.T) (*System, *loop.Sim) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sys, err := New(lp, reg, DefaultConfig(), GPUs{})
+	sys, err := New(lp, reg, cfg, GPUs{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,8 +163,50 @@ func TestLLMCancelChargesTokensUsed(t *testing.T) {
 	}
 }
 
-func TestRerankCancelDropsUncomputedPairs(t *testing.T) {
+func TestRerankIsOneJob(t *testing.T) {
 	sys, lp := newTestSystem(t)
+	prem := sys.Tenants().Get("prem")
+	calls := 0
+	var res RerankResult
+	_, err := sys.Rerank("prem", RerankParams{QueryTokens: 10, DocTokens: []int{90, 190, 290}},
+		func(r RerankResult) { calls++; res = r })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := sys.Scheduler(tenant.Rerank).Stats(); st.Queued+st.Dispatched > 1 {
+		t.Fatalf("rerank became %d scheduler requests, want 1", st.Queued+st.Dispatched)
+	}
+	lp.Run(lp.Now().Add(time.Minute))
+	if calls != 1 || res.Reason != sched.Completed || res.Pairs != 3 {
+		t.Fatalf("done %d times: %+v", calls, res)
+	}
+	// Input is the sum over pairs: (10+90) + (10+190) + (10+290).
+	if got := sys.Ledger().VRuntime(prem, tenant.Rerank); got != 600 {
+		t.Fatalf("vruntime %.0f, want 600", got)
+	}
+}
+
+func TestOversizedRerankRunsAlone(t *testing.T) {
+	sys, lp := newTestSystem(t)
+	docs := make([]int, 12) // 12 × (10 + 990) = 12,000 tokens, over the 4,096 batch budget
+	for i := range docs {
+		docs[i] = 990
+	}
+	done := false
+	if _, err := sys.Rerank("prem", RerankParams{QueryTokens: 10, DocTokens: docs},
+		func(r RerankResult) { done = r.Reason == sched.Completed }); err != nil {
+		t.Fatal(err)
+	}
+	lp.Run(lp.Now().Add(time.Minute))
+	if !done {
+		t.Fatal("a rerank bigger than the batch budget never ran")
+	}
+}
+
+func TestRerankCancelDropsUncomputedPairs(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RerankPairs = true
+	sys, lp := newTestSystemWith(t, cfg)
 	prem := sys.Tenants().Get("prem")
 	// Each pair is 1000 tokens; the rerank GPU fits 4 per batch.
 	docs := make([]int, 12)

@@ -27,6 +27,11 @@ type Stats struct {
 	Cancelled int
 	Failed    int // backend errors
 
+	// SLOMet / SLOMissed count requests that met or missed their latency
+	// target (see Workload.SLO). Client cancellations and requests still in
+	// flight at the end that could still have made it are in neither.
+	SLOMet, SLOMissed int
+
 	// LLM
 	TTFT []time.Duration
 	ITL  []time.Duration
@@ -35,6 +40,10 @@ type Stats struct {
 
 	// Fairness: |lag| samples (weighted tokens) for backlogged tenants.
 	LagSamples []float64
+	// TierLagSamples are the tier's total signed lag (the sum over its
+	// backlogged tenants), sampled once a second: positive when the tier as a
+	// whole has received less than its weighted share, negative when more.
+	TierLagSamples []float64
 
 	// ServedTokens is the weighted service (input + 2 × output) this tier
 	// received on this model during the run.
@@ -114,6 +123,17 @@ func (r *Report) count(k statKey, reason sched.DoneReason) {
 		s.Cancelled++
 	case sched.Failed:
 		s.Failed++
+	}
+}
+
+func (r *Report) slo(k statKey, met bool) {
+	if r.closed {
+		return
+	}
+	if met {
+		r.get(k).SLOMet++
+	} else {
+		r.get(k).SLOMissed++
 	}
 }
 
@@ -197,6 +217,8 @@ func (lt *lagTracker) sample() {
 				sumW += t.Weight()
 			}
 		}
+		tierLag := map[tenant.Tier]float64{}
+		tierIn := map[tenant.Tier]bool{}
 		for _, t := range lt.all {
 			in := st.Active[t] > 0 || delta[t] > 0
 			if !in {
@@ -206,6 +228,12 @@ func (lt *lagTracker) sample() {
 			lt.lag[m][t] += total*t.Weight()/sumW - delta[t]
 			s := lt.rep.get(statKey{m, t.Tier})
 			s.LagSamples = append(s.LagSamples, math.Abs(lt.lag[m][t]))
+			tierLag[t.Tier] += lt.lag[m][t]
+			tierIn[t.Tier] = true
+		}
+		for tier := range tierIn {
+			s := lt.rep.get(statKey{m, tier})
+			s.TierLagSamples = append(s.TierLagSamples, tierLag[tier])
 		}
 	}
 }
@@ -276,6 +304,16 @@ func Print(out io.Writer, reports ...*Report) {
 		rt.print(out)
 	}
 
+	slo := w.SLO
+	perModelTier(fmt.Sprintf("Goodput: requests within SLO (LLM TTFT ≤ %s and TPOT ≤ %s, embed ≤ %s, rerank ≤ %s)",
+		dur(slo.TTFT), dur(slo.TPOT), dur(slo.Embed), dur(slo.Rerank)), func(s *Stats) string {
+		n := s.SLOMet + s.SLOMissed
+		if n == 0 {
+			return "-"
+		}
+		return fmt.Sprintf("%.0f%% (%.2f/s)", 100*float64(s.SLOMet)/float64(n), float64(s.SLOMet)/w.Duration.Seconds())
+	})
+
 	latency := func(ds []time.Duration) string { return dur(pct(ds, 50)) + " / " + dur(pct(ds, 99)) }
 	perTier("LLM time to first token (p50 / p99)", tenant.LLM, func(s *Stats) string { return latency(s.TTFT) })
 	perTier("LLM inter-token latency (p50 / p99)", tenant.LLM, func(s *Stats) string { return latency(s.ITL) })
@@ -294,8 +332,14 @@ func Print(out io.Writer, reports ...*Report) {
 	}
 	rt.print(out)
 
-	perModelTier("Fairness: mean |lag| in tokens (lower is fairer)", func(s *Stats) string {
+	perModelTier("Fairness: mean |lag| per tenant in tokens (lower is fairer)", func(s *Stats) string {
 		return fmt.Sprintf("%.0f", meanF(s.LagSamples))
+	})
+	perModelTier("Tier lag: mean signed lag of the whole tier in tokens (+ owed service / behind its share, − ahead)", func(s *Stats) string {
+		if len(s.TierLagSamples) == 0 {
+			return "-"
+		}
+		return fmt.Sprintf("%+.0f", meanF(s.TierLagSamples))
 	})
 	perModelTier("Tokens served per tenant", func(s *Stats) string {
 		if s.Tenants == 0 {

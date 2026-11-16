@@ -61,7 +61,7 @@ type PolicyOptions struct {
 }
 
 // Policies lists the policy names NewPolicy accepts.
-var Policies = []string{"fcfs", "eevdf", "tiered", "drr"}
+var Policies = []string{"fcfs", "eevdf", "tiered", "mixed", "drr"}
 
 // NewPolicy returns a policy by name for a model's scheduler:
 //
@@ -69,6 +69,8 @@ var Policies = []string{"fcfs", "eevdf", "tiered", "drr"}
 //	eevdf   one EEVDF queue over all tenants
 //	tiered  a premium queue and a free queue, each EEVDF over its tenants,
 //	        with service split between them by tier weight
+//	mixed   two EEVDF queues holding both tiers (A mostly premium, B mostly
+//	        free, chosen at random per request), splitting service 50/50
 //	drr     Cohere-style deficit round robin: tiers in priority order, DRR
 //	        between the tenants of a tier, FIFO within a tenant
 func NewPolicy(name string, model Model, opts PolicyOptions) (Policy, error) {
@@ -79,6 +81,8 @@ func NewPolicy(name string, model Model, opts PolicyOptions) (Policy, error) {
 		return NewEEVDF(), nil
 	case "tiered":
 		return NewTiered(opts.TierShare)
+	case "mixed":
+		return NewMixed(), nil
 	case "drr":
 		return NewDRR(model, opts.DRRTokenQuantum), nil
 	}

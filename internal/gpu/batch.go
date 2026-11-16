@@ -52,8 +52,14 @@ func NewBatch(lp loop.Loop, cfg BatchConfig) *Batch {
 
 func (g *Batch) Attach(s *sched.Scheduler) { g.sched = s }
 
+// CanAdmit is true while no batch is running and r fits in the token budget.
+// A job bigger than the whole budget (a large rerank) runs alone in a batch
+// of its own rather than never fitting.
 func (g *Batch) CanAdmit(r *sched.Request) bool {
-	return !g.busy && g.used+r.InputTokens <= g.cfg.MaxBatchTokens
+	if g.busy {
+		return false
+	}
+	return g.used+r.InputTokens <= g.cfg.MaxBatchTokens || g.used == 0
 }
 
 func (g *Batch) Admit(r *sched.Request) {

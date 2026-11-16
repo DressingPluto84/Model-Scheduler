@@ -96,6 +96,10 @@ func NewGPUs(ctx context.Context, lp *loop.Real, cfg Config) (system.GPUs, error
 			return sched.EmbedResult(v), err
 		}),
 		Rerank: newPoolingGPU(lp, cfg.RerankBatchTokens, func(ctx context.Context, r *sched.Request) (any, error) {
+			if p, ok := r.Payload.(sched.RerankAllPayload); ok {
+				scores, err := rerankC.RerankAll(ctx, p.Query, p.Docs)
+				return sched.RerankScores(scores), err
+			}
 			p, _ := r.Payload.(sched.RerankPayload)
 			s, err := rerankC.Rerank(ctx, p.Query, p.Doc)
 			return sched.RerankScore(s), err
@@ -252,7 +256,11 @@ func newPoolingGPU(lp *loop.Real, batchTokens int, call func(context.Context, *s
 
 func (g *PoolingGPU) Attach(s *sched.Scheduler) { g.sched = s }
 
-func (g *PoolingGPU) CanAdmit(r *sched.Request) bool { return g.used+r.InputTokens <= g.batchTokens }
+// CanAdmit is true when r fits in the in-flight token budget. A job bigger
+// than the whole budget (a large rerank) runs when nothing else is in flight.
+func (g *PoolingGPU) CanAdmit(r *sched.Request) bool {
+	return g.used+r.InputTokens <= g.batchTokens || g.used == 0
+}
 
 func (g *PoolingGPU) Admit(r *sched.Request) {
 	g.used += r.InputTokens

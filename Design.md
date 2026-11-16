@@ -21,7 +21,7 @@ Client → API gateway → services (embed, rerank, LLM) → schedulers (embed, 
 There are no real GPUs in the MVP. Each model has one simulated GPU, running as its own goroutine, that models memory capacity and timing:
 
 - **LLM GPU (continuous batching):** has a KV-cache budget in tokens. A request is admitted only if `input + max_tokens` fits, and that reservation is held until the request completes or is cancelled. Each step prefills newly admitted requests (time proportional to their input tokens) and decodes one token for every running request (time = `base + β × batch size`). Each request's true output length is sampled from a distribution and capped at `max_tokens`. Tokens are emitted back to the LLM service as they are generated.
-- **Embed / rerank GPUs:** have a token budget for in-flight work. A batch takes `base + α × total tokens`. For rerank, each doc-query pair is one job.
+- **Embed / rerank GPUs:** have a token budget for in-flight work. A batch takes `base + α × total tokens`. A rerank request is one job. A job bigger than the whole token budget runs alone in a batch of its own.
 - **Clock:** everything runs on a `Clock` interface. The live server uses the real clock; benchmarks use a simulated, event-driven clock so runs are fast and deterministic.
 - All capacities and timing constants are configurable.
 
@@ -31,7 +31,7 @@ We will have standard rate limiting procedures in the API gateway. The granulari
 
 ## Services
 
-These services all enforce token limits, which depend on customer status. The rerank service splits a request into doc-query pairs to reduce the size of a single job; each pair is its own request, and the service combines the results at the end.
+These services all enforce token limits, which depend on customer status. A rerank request is scheduled and run as a single job. Its input is the sum over its doc-query pairs, since the query is read once per document. Splitting it into one request per pair is available as an option (`-rerank-pairs`), but splitting hurt rerank latency under the tiered policies, so it is off by default.
 
 Only the LLM service streams; it streams tokens via websocket to the clients that sent the requests. Embed and rerank return a single response.
 
@@ -41,7 +41,7 @@ Each scheduler runs EEVDF. Input tokens are weighted as 1, and output tokens (if
 
 ```
 vruntime             = input + 2 × output, for all tokens processed on this model all time
-virtual time for job = num input tokens (num in pair for rerank) / weight
+virtual time for job = num input tokens (summed over doc-query pairs for rerank) / weight
 used                 = vruntime / weight
 eligible            -> vruntime <= sum of system vruntime × (w_i / sum of all w)
                        (both sums over enqueued clients)
@@ -50,7 +50,7 @@ choose smallest deadline of eligible
 ```
 
 - vruntime is tracked per model: each scheduler (embed, rerank, LLM) keeps its own vruntime for each tenant, so heavy use of one model doesn't lower a tenant's priority on the others. Billing still counts the sum over all models.
-- All doc-query pairs of a rerank request share one deadline, computed from the whole request's input tokens (`used + total input / weight`). Once the first pair is picked, the rest of the request's pairs are picked next, so a rerank request is scheduled like one job of its full size but still runs as small pairs.
+- When reranks are split into pairs (`-rerank-pairs`), all pairs of a rerank request share one deadline, computed from the whole request's input tokens (`used + total input / weight`). Once the first pair is picked, the rest of the request's pairs are picked next, so a rerank request is scheduled like one job of its full size but still runs as small pairs.
 - The scheduler queues requests, and each request carries the values from its client that we need to make decisions (vruntime, weight).
 - The deadline uses only input tokens for now.
 - Input tokens are charged when a job is admitted to the GPU. This prevents someone from being charged for a request that never actually ran.
@@ -101,7 +101,7 @@ LLM decode should have a max output of 4096 tokens.
 
 ## Cancellation
 
-If a client disconnects, the rest of the job is aborted off of the GPU, and the tokens used still count towards their vruntime. For rerank, any pairs that have not been computed yet are removed.
+If a client disconnects, the rest of the job is aborted off of the GPU, and the tokens used still count towards their vruntime. For rerank split into pairs, any pairs that have not been computed yet are removed.
 
 ## Billing
 

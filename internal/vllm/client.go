@@ -227,6 +227,32 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 	return out.Data[0].Embedding, nil
 }
 
+// RerankAll scores every document against the query in one /rerank call and
+// returns the scores in input order.
+func (c *Client) RerankAll(ctx context.Context, query string, docs []string) ([]float64, error) {
+	var out struct {
+		Results []struct {
+			Index          int     `json:"index"`
+			RelevanceScore float64 `json:"relevance_score"`
+		} `json:"results"`
+	}
+	body := map[string]any{"model": c.Model, "query": query, "documents": docs}
+	if err := c.postJSON(ctx, "/rerank", body, &out); err != nil {
+		return nil, err
+	}
+	if len(out.Results) != len(docs) {
+		return nil, fmt.Errorf("rerank returned %d results for %d documents", len(out.Results), len(docs))
+	}
+	scores := make([]float64, len(docs))
+	for _, r := range out.Results {
+		if r.Index < 0 || r.Index >= len(docs) {
+			return nil, fmt.Errorf("rerank result index %d out of range", r.Index)
+		}
+		scores[r.Index] = r.RelevanceScore
+	}
+	return scores, nil
+}
+
 // Rerank scores one query-document pair with /rerank.
 func (c *Client) Rerank(ctx context.Context, query, doc string) (float64, error) {
 	var out struct {

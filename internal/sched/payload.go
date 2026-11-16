@@ -18,9 +18,17 @@ type RerankPayload struct {
 	Doc   string
 }
 
+// RerankAllPayload is a whole rerank request run as one job.
+type RerankAllPayload struct {
+	Query string
+	Docs  []string
+}
+
 // Results stored in Request.Result by real GPU backends: an embed request
-// gets an EmbedResult and a rerank pair gets a RerankScore.
+// gets an EmbedResult, a rerank pair a RerankScore, and a whole rerank job
+// RerankScores (one per document, in input order).
 type (
-	EmbedResult []float32
-	RerankScore float64
+	EmbedResult  []float32
+	RerankScore  float64
+	RerankScores []float64
 )

@@ -167,9 +167,12 @@ type RerankResult struct {
 	Done    time.Time
 }
 
-// Rerank submits a rerank request. It is split into one request per
-// doc-query pair, and done is called once every pair has finished. If the
-// client disconnects, pairs not yet computed are removed.
+// Rerank submits a rerank request. By default it is scheduled and run as one
+// job whose input is the sum over its doc-query pairs (the query counts once
+// per document, as a cross-encoder reads it). With Config.RerankPairs it is
+// split into one request per pair instead, and done is called once every
+// pair has finished; if the client disconnects, pairs not yet computed are
+// removed.
 func (s *System) Rerank(tenantID string, p RerankParams, done func(RerankResult)) (*Handle, *Error) {
 	t, err := s.gateway(tenantID, tenant.Rerank)
 	if err != nil {
@@ -188,6 +191,10 @@ func (s *System) Rerank(tenantID string, p RerankParams, done func(RerankResult)
 	}
 	if err := s.checkBilling(t); err != nil {
 		return nil, err
+	}
+
+	if !s.cfg.RerankPairs {
+		return s.rerankOneJob(t, p, done), nil
 	}
 
 	h := &Handle{sys: s}
@@ -228,6 +235,27 @@ func (s *System) Rerank(tenantID string, p RerankParams, done func(RerankResult)
 		s.scheds[tenant.Rerank].Submit(r)
 	}
 	return h, nil
+}
+
+// rerankOneJob submits the whole rerank request as a single job.
+func (s *System) rerankOneJob(t *tenant.Tenant, p RerankParams, done func(RerankResult)) *Handle {
+	input := 0
+	for _, d := range p.DocTokens {
+		input += p.QueryTokens + d
+	}
+	r := s.newRequest(t, tenant.Rerank, input, sched.RerankAllPayload{Query: p.Query, Docs: p.Docs})
+	r.OnDone = func(reason sched.DoneReason) {
+		if done == nil {
+			return
+		}
+		res := RerankResult{Reason: reason, Err: r.Err, Pairs: len(p.DocTokens), Arrival: r.Arrival, Done: s.loop.Now()}
+		if scores, ok := r.Result.(sched.RerankScores); ok {
+			res.Scores = scores
+		}
+		done(res)
+	}
+	s.scheds[tenant.Rerank].Submit(r)
+	return &Handle{sys: s, reqs: []*sched.Request{r}}
 }
 
 // --- LLM ---------------------------------------------------------------------
