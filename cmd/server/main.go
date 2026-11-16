@@ -20,7 +20,7 @@ import (
 func main() {
 	addr := flag.String("addr", ":8080", "listen address")
 	tenantsPath := flag.String("tenants", "tenants.json", "JSON file listing tenants and their tiers")
-	policy := flag.String("policy", "eevdf", "scheduling policy: fcfs, eevdf, tiered, mixed or drr")
+	policy := flag.String("policy", "eevdf", "scheduling policy: fcfs, eevdf, tiered, lottery or drr")
 	rerankPairs := flag.Bool("rerank-pairs", false, "split each rerank request into one scheduler request per doc-query pair (default: one job)")
 	tierShare := flag.String("tier-share", string(sched.TierSharePerTenant), "tiered policy split: per-tenant or per-tier")
 	backend := flag.String("backend", "sim", "GPU backend: sim or vllm")

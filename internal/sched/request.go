@@ -86,7 +86,6 @@ type Request struct {
 	seq      uint64
 	deadline float64
 	node     *rbtree.Node[*Request]
-	lane     int // which queue the Mixed policy put it in
 
 	// GPU-side bookkeeping.
 	Generated int // output tokens produced so far

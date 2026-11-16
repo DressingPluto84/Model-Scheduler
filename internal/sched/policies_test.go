@@ -134,27 +134,18 @@ func TestNewPolicyNames(t *testing.T) {
 	}
 }
 
-func TestMixedQueuesAndEqualSplit(t *testing.T) {
-	p := NewMixed()
+func TestLotteryPicksPremiumThreeQuarters(t *testing.T) {
+	p := NewLottery()
 	h := newHarness(p, 100, 1)
 	prem := &tenant.Tenant{ID: "p", Tier: tenant.Premium}
 	free := &tenant.Tenant{ID: "f", Tier: tenant.Free}
-	var inA = map[tenant.Tier]int{}
-	for i := 0; i < 400; i++ {
-		for _, tn := range []*tenant.Tenant{prem, free} {
-			if r := h.submit(tn, 100); r.lane == 0 {
-				inA[tn.Tier]++
-			}
-		}
+	for i := 0; i < 1000; i++ {
+		h.submit(prem, 100)
+		h.submit(free, 100)
 	}
-	if f := float64(inA[tenant.Premium]) / 400; math.Abs(f-0.75) > 0.06 {
-		t.Fatalf("%.2f of premium requests in queue A, want 0.75", f)
-	}
-	if f := float64(inA[tenant.Free]) / 400; math.Abs(f-0.25) > 0.06 {
-		t.Fatalf("%.2f of free requests in queue A, want 0.25", f)
-	}
-	h.lp.Run(h.lp.Now().Add(20 * time.Second)) // 200 requests
-	if a, b := p.served[0], p.served[1]; math.Abs(a-b) > 200 {
-		t.Fatalf("queues served %.0f and %.0f, want an even split", a, b)
+	h.lp.Run(h.lp.Now().Add(40 * time.Second)) // 400 of the 2,000 requests
+	pv, fv := h.l.VRuntime(prem, tenant.Embed), h.l.VRuntime(free, tenant.Embed)
+	if f := pv / (pv + fv); math.Abs(f-0.75) > 0.06 {
+		t.Fatalf("premium got %.2f of service (%.0f:%.0f), want about 0.75", f, pv, fv)
 	}
 }

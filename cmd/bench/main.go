@@ -29,6 +29,8 @@ func main() {
 	flag.BoolVar(&w.Sleeper, "sleeper", w.Sleeper, "add a premium tenant that sleeps for the middle third of the run")
 	flag.Float64Var(&w.CancelFraction, "cancel", w.CancelFraction, "fraction of LLM requests that disconnect early")
 	flag.Int64Var(&w.Seed, "seed", w.Seed, "random seed")
+	flag.IntVar(&w.RerankDocsMin, "rerank-docs-min", w.RerankDocsMin, "fewest documents per rerank request")
+	flag.IntVar(&w.RerankDocsMax, "rerank-docs-max", w.RerankDocsMax, "most documents per rerank request")
 	flag.DurationVar(&w.SLO.TTFT, "slo-ttft", w.SLO.TTFT, "goodput SLO: LLM time to first token")
 	flag.DurationVar(&w.SLO.TPOT, "slo-tpot", w.SLO.TPOT, "goodput SLO: LLM average time per output token")
 	flag.DurationVar(&w.SLO.Embed, "slo-embed", w.SLO.Embed, "goodput SLO: embed end-to-end latency")
@@ -37,10 +39,11 @@ func main() {
 	// within minutes and most traffic becomes 429s, which hides the scheduler.
 	billing := flag.Bool("billing", false, "enforce the 24h billing caps")
 	rerankPairs := flag.Bool("rerank-pairs", false, "split each rerank request into one scheduler request per doc-query pair (default: one job)")
+	rerankPerToken := flag.Duration("rerank-per-token", system.DefaultConfig().Rerank.PerToken, "simulated rerank GPU time per input token")
 	depth := flag.Int("dispatch-depth", system.DefaultConfig().DispatchDepth, "dispatch queue depth")
 	flag.Float64Var(&pw, "premium-weight", tenant.TierWeights[tenant.Premium], "EEVDF weight for premium tenants")
 	flag.Float64Var(&fw, "free-weight", tenant.TierWeights[tenant.Free], "EEVDF weight for free tenants")
-	policies := flag.String("policies", "fcfs,eevdf,tiered,mixed,drr", "comma-separated policies to compare: "+strings.Join(sched.Policies, ", "))
+	policies := flag.String("policies", "fcfs,eevdf,tiered,lottery,drr", "comma-separated policies to compare: "+strings.Join(sched.Policies, ", "))
 	tierShare := flag.String("tier-share", string(sched.TierSharePerTenant),
 		"tiered policy split between tiers: per-tenant (weight ratio per tenant) or per-tier (weight ratio between whole tiers)")
 	drrQuantum := flag.Int("drr-quantum", 4096, "drr quantum in tokens for embed and rerank (LLM uses 1 request)")
@@ -54,6 +57,9 @@ func main() {
 	flag.Parse()
 	if pw <= 0 || fw <= 0 {
 		log.Fatal("weights must be positive")
+	}
+	if w.RerankDocsMin < 1 || w.RerankDocsMax < w.RerankDocsMin {
+		log.Fatal("need 1 <= -rerank-docs-min <= -rerank-docs-max")
 	}
 	tenant.TierWeights[tenant.Premium], tenant.TierWeights[tenant.Free] = pw, fw
 
@@ -80,6 +86,7 @@ func main() {
 		cfg.BillingEnabled = *billing
 		cfg.DispatchDepth = *depth
 		cfg.RerankPairs = *rerankPairs
+		cfg.Rerank.PerToken = *rerankPerToken
 		cfg.RatioReset = sched.RatioReset{Factor: *resetFactor, MinTokens: *resetMin}
 		cfg.PolicyOptions = sched.PolicyOptions{TierShare: sched.TierShare(*tierShare), DRRTokenQuantum: *drrQuantum}
 		if b.NewGPUs != nil {

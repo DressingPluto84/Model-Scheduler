@@ -71,6 +71,8 @@ share (per-tier)            = tier weight
 
 Per-tenant keeps premium:free at 3:1 for each tenant (1,500 premium and 3,764 free tenants split 54% / 46%). Per-tier gives the tiers as a whole 75% / 25%. Share uses the active tenant count right now, so the split follows tenants joining and leaving. A tier that was idle comes back level with the other tier instead of catching up, and a rerank request that has started finishes before the scheduler switches tiers.
 
+The `lottery` policy uses the same two queues but drops the token accounting: each pick draws the premium queue with a 75% chance and the free queue with a 25% chance. If the drawn queue is empty, the other one is used.
+
 ### Dispatch queue
 
 Each scheduler has a small, bounded dispatch queue (configurable depth) between it and its GPU. The scheduler picks requests by EEVDF into this queue ahead of time, so the GPU always has the next job ready, and the GPU pulls from it in order as space frees up. If the request at the head of the queue doesn't fit in the GPU's free memory, the GPU waits until it fits rather than skipping ahead.
