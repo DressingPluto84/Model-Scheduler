@@ -29,9 +29,11 @@ wait_ready() {
 }
 
 start() {
-  local name=$1 port=$2
+  local name=$1 port=$2 model=$3
   shift 2
-  if curl -sf "http://127.0.0.1:$port/health" >/dev/null; then
+  # Ask for the model list, not /health: other servers (e.g. the image's
+  # nginx) can answer /health on a port and look like a running vLLM.
+  if curl -sf "http://127.0.0.1:$port/v1/models" | grep -qF "\"$model\""; then
     echo "$name already running on :$port"
     return
   fi

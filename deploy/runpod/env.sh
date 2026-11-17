@@ -14,7 +14,8 @@ export LLM_MODEL="${LLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}"
 export EMBED_MODEL="${EMBED_MODEL:-BAAI/bge-base-en-v1.5}"
 export RERANK_MODEL="${RERANK_MODEL:-BAAI/bge-reranker-v2-m3}"
 
-export LLM_PORT="${LLM_PORT:-8001}"
+# Not 8001: the Runpod PyTorch image runs nginx there (a proxy to 8000).
+export LLM_PORT="${LLM_PORT:-8000}"
 export EMBED_PORT="${EMBED_PORT:-8002}"
 export RERANK_PORT="${RERANK_PORT:-8003}"
 
