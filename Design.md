@@ -25,6 +25,8 @@ There are no real GPUs in the MVP. Each model has one simulated GPU, running as 
 - **Clock:** everything runs on a `Clock` interface. The live server uses the real clock; benchmarks use a simulated, event-driven clock so runs are fast and deterministic.
 - All capacities and timing constants are configurable.
 
+The simulated GPU sizes and speeds are calibrated to one L40S running the three models (measured with `deploy/runpod/profile.py`), so local benchmarks show where the real GPU starts to queue before we pay to test on it. The LLM's decode speed is measured with embed and rerank busy at the same time, since all three share the GPU.
+
 ## API Gateway
 
 We will have standard rate limiting procedures in the API gateway. The granularity can be simple (tenant, endpoint) keys with a sliding window approach. This is the best place to prevent regular abuse, so that unusually high traffic doesn't hit the rest of the scheduler and we preserve time for jobs that actually have a chance to run.

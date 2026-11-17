@@ -206,6 +206,7 @@ func TestOversizedRerankRunsAlone(t *testing.T) {
 func TestRerankCancelDropsUncomputedPairs(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.RerankPairs = true
+	cfg.Rerank.MaxBatchTokens = 4096
 	sys, lp := newTestSystemWith(t, cfg)
 	prem := sys.Tenants().Get("prem")
 	// Each pair is 1000 tokens; the rerank GPU fits 4 per batch.
@@ -220,7 +221,7 @@ func TestRerankCancelDropsUncomputedPairs(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Let the first batch finish, then disconnect.
-	batch := DefaultConfig().Rerank
+	batch := cfg.Rerank
 	lp.Run(lp.Now().Add(batch.Base + 4000*batch.PerToken + time.Millisecond))
 	h.Cancel()
 	lp.Run(lp.Now().Add(time.Minute))

@@ -46,8 +46,16 @@ type Config struct {
 	Rerank gpu.BatchConfig
 }
 
-// DefaultConfig returns the MVP defaults. The simulated GPU sizes and speeds
-// are chosen so the default benchmark workload roughly saturates every GPU.
+// DefaultConfig returns the MVP defaults. The simulated GPUs are calibrated
+// to one L40S running Qwen2.5-7B, bge-base and bge-reranker-v2-m3 with a
+// 70/10/10 memory split (measured with deploy/runpod/profile.py):
+//
+//   - Embed and rerank keep up to 16,384 input tokens in flight, like the vLLM
+//     backend, and take Base + PerToken × tokens.
+//   - The LLM's KV budget and batch cap are what vLLM reported. StepBase and
+//     PrefillPerToken are from the profile. DecodePerSeq is fitted to a run
+//     with all three models busy (122ms per step at 256 sequences): the models
+//     share one GPU, and alone a step at 256 sequences takes only 40ms.
 func DefaultConfig() Config {
 	return Config{
 		Policy:           "eevdf",
@@ -59,25 +67,25 @@ func DefaultConfig() Config {
 		RateLimitWindow:  time.Minute,
 		DefaultMaxTokens: 512,
 		LLM: gpu.LLMConfig{
-			KVCacheTokens:   10240,
-			MaxBatch:        64,
-			StepBase:        20 * time.Millisecond,
-			DecodePerSeq:    500 * time.Microsecond,
-			PrefillPerToken: 50 * time.Microsecond,
+			KVCacheTokens:   266547,
+			MaxBatch:        256,
+			StepBase:        20600 * time.Microsecond,
+			DecodePerSeq:    320 * time.Microsecond,
+			PrefillPerToken: 80 * time.Microsecond,
 			FlushEvery:      32,
 			OutputMedian:    200,
 			OutputSigma:     0.8,
 			Seed:            1,
 		},
 		Embed: gpu.BatchConfig{
-			MaxBatchTokens: 4096,
-			Base:           20 * time.Millisecond,
-			PerToken:       600 * time.Microsecond,
+			MaxBatchTokens: 16384,
+			Base:           14 * time.Millisecond,
+			PerToken:       5700 * time.Nanosecond,
 		},
 		Rerank: gpu.BatchConfig{
-			MaxBatchTokens: 4096,
-			Base:           10 * time.Millisecond,
-			PerToken:       120 * time.Microsecond,
+			MaxBatchTokens: 16384,
+			Base:           37 * time.Millisecond,
+			PerToken:       4500 * time.Nanosecond,
 		},
 	}
 }

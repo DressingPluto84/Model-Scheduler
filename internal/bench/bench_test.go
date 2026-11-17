@@ -42,7 +42,7 @@ func TestGoodputHighWhenLightlyLoaded(t *testing.T) {
 }
 
 func TestGoodputLowWhenOverloaded(t *testing.T) {
-	rep := run(t, 30, 90)
+	rep := run(t, 64, 144) // about 8× what one L40S serves within SLO
 	if g := goodput(rep, tenant.LLM); g > 0.2 {
 		t.Errorf("llm goodput %.2f at heavy overload, want <= 0.2", g)
 	}
@@ -54,7 +54,7 @@ func TestTierLagSignUnderStrictPriority(t *testing.T) {
 	cfg.BillingEnabled = false
 	w := DefaultWorkload()
 	w.Duration = 2 * time.Minute
-	w.Premium, w.Free, w.Sleeper = 30, 60, false
+	w.Premium, w.Free, w.Sleeper = 150, 60, false
 	rep, err := Run(cfg, w, Backend{})
 	if err != nil {
 		t.Fatal(err)
