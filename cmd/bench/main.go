@@ -43,9 +43,7 @@ func main() {
 	depth := flag.Int("dispatch-depth", system.DefaultConfig().DispatchDepth, "dispatch queue depth")
 	flag.Float64Var(&pw, "premium-weight", tenant.TierWeights[tenant.Premium], "EEVDF weight for premium tenants")
 	flag.Float64Var(&fw, "free-weight", tenant.TierWeights[tenant.Free], "EEVDF weight for free tenants")
-	policies := flag.String("policies", "fcfs,eevdf,tiered,lottery,drr", "comma-separated policies to compare: "+strings.Join(sched.Policies, ", "))
-	tierShare := flag.String("tier-share", string(sched.TierSharePerTenant),
-		"tiered policy split between tiers: per-tenant (weight ratio per tenant) or per-tier (weight ratio between whole tiers)")
+	policies := flag.String("policies", "fcfs,eevdf,drr", "comma-separated policies to compare: "+strings.Join(sched.Policies, ", "))
 	drrQuantum := flag.Int("drr-quantum", 4096, "drr quantum in tokens for embed and rerank (LLM uses 1 request)")
 	resetFactor := flag.Float64("reset-factor", 0,
 		"reset a model's vruntimes when premium:free service per tenant exceeds this × the weight ratio (0 = off)")
@@ -88,7 +86,7 @@ func main() {
 		cfg.RerankPairs = *rerankPairs
 		cfg.Rerank.PerToken = *rerankPerToken
 		cfg.RatioReset = sched.RatioReset{Factor: *resetFactor, MinTokens: *resetMin}
-		cfg.PolicyOptions = sched.PolicyOptions{TierShare: sched.TierShare(*tierShare), DRRTokenQuantum: *drrQuantum}
+		cfg.PolicyOptions = sched.PolicyOptions{DRRTokenQuantum: *drrQuantum}
 		if b.NewGPUs != nil {
 			log.Printf("starting %s run", policy)
 		}

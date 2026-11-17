@@ -59,11 +59,10 @@ func New(model Model, lp loop.Loop, l *ledger.Ledger, policy Policy, gpu GPU, di
 		ledger: l,
 		policy: policy,
 		env: &Env{
-			Ledger:        l,
-			Model:         model,
-			Active:        make(map[*tenant.Tenant]int),
-			Pending:       make(map[*tenant.Tenant]int64),
-			ActiveTenants: make(map[tenant.Tier]int),
+			Ledger:  l,
+			Model:   model,
+			Active:  make(map[*tenant.Tenant]int),
+			Pending: make(map[*tenant.Tenant]int64),
 		},
 		gpu:           gpu,
 		dispatchDepth: dispatchDepth,
@@ -105,17 +104,12 @@ func (s *Scheduler) Submit(r *Request) {
 		amount := int64(in) + ledger.OutputWeight*int64(out)
 		s.served[t] += amount
 		s.ratio.add(t, amount)
-		if o, ok := s.policy.(UsageObserver); ok {
-			o.OnUsage(r, in, out, s.env)
-		}
 		if usage != nil {
 			usage(in, out)
 		}
 	}
 	s.policy.Add(r, s.env, waking)
-	if s.env.Active[t]++; s.env.Active[t] == 1 {
-		s.env.ActiveTenants[t.Tier]++
-	}
+	s.env.Active[t]++
 	s.pump()
 }
 
@@ -173,7 +167,6 @@ func (s *Scheduler) finish(r *Request, reason DoneReason) {
 	t := r.Tenant
 	if s.env.Active[t]--; s.env.Active[t] <= 0 {
 		delete(s.env.Active, t)
-		s.env.ActiveTenants[t.Tier]--
 	}
 	now := s.loop.Now()
 	s.ledger.Depart(t, s.model, now)

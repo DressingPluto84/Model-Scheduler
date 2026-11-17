@@ -33,9 +33,6 @@ type EEVDF struct {
 	// started holds groups that have had a part picked and still have parts
 	// queued; their parts are picked before anything else.
 	started []*Group
-	// tier, when set, limits the eligibility sums to that tier's tenants (the
-	// per-tier queues of the Tiered policy). Empty means all tenants.
-	tier tenant.Tier
 }
 
 func NewEEVDF() *EEVDF {
@@ -83,7 +80,7 @@ func (e *EEVDF) Add(r *Request, env *Env, waking bool) {
 	w := t.Weight()
 	if waking {
 		// Come back at max(current vruntime, minimum eligible value).
-		if v, ok := minEligible(t, env, e.tier); ok {
+		if v, ok := MinEligible(t, env); ok {
 			env.Ledger.LiftVRuntime(t, env.Model, v)
 		}
 	}
@@ -143,7 +140,7 @@ func (e *EEVDF) Pick(env *Env) *Request {
 		return e.take(g.queued[0].node)
 	}
 
-	sumS, sumW := activeSums(env, nil, e.tier)
+	sumS, sumW := activeSums(env, nil)
 	eligible := make(map[*tenant.Tenant]bool)
 	var pick *rbtree.Node[*Request]
 	for n := e.tree.Min(); n != nil; n = e.tree.Next(n) {
@@ -189,10 +186,8 @@ func (r *Request) Deadline() float64 { return r.deadline }
 // MinEligible returns Σ vruntime × w_t / Σ w over the other enqueued tenants:
 // the smallest vruntime at which t would no longer be ahead of its fair share.
 // ok is false when no other tenant is enqueued.
-func MinEligible(t *tenant.Tenant, env *Env) (float64, bool) { return minEligible(t, env, "") }
-
-func minEligible(t *tenant.Tenant, env *Env, tier tenant.Tier) (float64, bool) {
-	sumS, sumW := activeSums(env, t, tier)
+func MinEligible(t *tenant.Tenant, env *Env) (float64, bool) {
+	sumS, sumW := activeSums(env, t)
 	if sumW == 0 {
 		return 0, false
 	}
@@ -201,11 +196,11 @@ func minEligible(t *tenant.Tenant, env *Env, tier tenant.Tier) (float64, bool) {
 	return math.Ceil(sumS * t.Weight() / sumW), true
 }
 
-// activeSums sums effective vruntime and weight over enqueued tenants
-// (only those of tier, if set), leaving out exclude.
-func activeSums(env *Env, exclude *tenant.Tenant, tier tenant.Tier) (sumS, sumW float64) {
+// activeSums sums effective vruntime and weight over enqueued tenants,
+// leaving out exclude.
+func activeSums(env *Env, exclude *tenant.Tenant) (sumS, sumW float64) {
 	for t, n := range env.Active {
-		if n <= 0 || t == exclude || (tier != "" && t.Tier != tier) {
+		if n <= 0 || t == exclude {
 			continue
 		}
 		sumS += env.EffectiveVRuntime(t)
@@ -221,15 +216,4 @@ func isEligible(s, w, sumS, sumW float64) bool {
 	// s <= sumS × w / sumW, rearranged to avoid division.
 	lhs, rhs := s*sumW, sumS*w
 	return lhs <= rhs+1e-9*(1+rhs)
-}
-
-// hasStartedGroup reports whether a started rerank request still has parts
-// queued here.
-func (e *EEVDF) hasStartedGroup() bool {
-	for _, g := range e.started {
-		if len(g.queued) > 0 {
-			return true
-		}
-	}
-	return false
 }

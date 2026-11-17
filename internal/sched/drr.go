@@ -2,6 +2,9 @@ package sched
 
 import "github.com/DressingPluto84/Model-Scheduler/internal/tenant"
 
+// tierOrder lists the tiers from highest priority to lowest.
+var tierOrder = []tenant.Tier{tenant.Premium, tenant.Free}
+
 // DRR is deficit round robin as described in Cohere's "serving fairness"
 // post (https://cohere.com/blog/serving-fairness):
 //

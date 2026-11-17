@@ -31,7 +31,7 @@ We will have standard rate limiting procedures in the API gateway. The granulari
 
 ## Services
 
-These services all enforce token limits, which depend on customer status. A rerank request is scheduled and run as a single job. Its input is the sum over its doc-query pairs, since the query is read once per document. Splitting it into one request per pair is available as an option (`-rerank-pairs`), but splitting hurt rerank latency under the tiered policies, so it is off by default.
+These services all enforce token limits, which depend on customer status. A rerank request is scheduled and run as a single job. Its input is the sum over its doc-query pairs, since the query is read once per document. Splitting it into one request per pair is available as an option (`-rerank-pairs`), but it is off by default.
 
 Only the LLM service streams; it streams tokens via websocket to the clients that sent the requests. Embed and rerank return a single response.
 
@@ -59,19 +59,9 @@ For a given GPU decoding, we batch our writes for VTC accounting, incrementing v
 
 We will store the requests in an RB tree, as is done in Linux. Clients that return after some time come back at the max of their current vruntime and their minimum eligible value (sum of system vruntime × w_i / sum of all w). A tenant leaves a model's scheduler either by not making requests to that model for a while (an idle timeout, defaulting to 30s with nothing queued or running there) or by disconnecting and coming back.
 
-### Tiered queues
+### Why one EEVDF queue
 
-With far more tenants than the GPUs can serve, one EEVDF queue over every tenant turns into strict premium priority: almost every tenant is still eligible, so only the deadline decides, and a premium deadline is 3× smaller. To keep the weight ratio in that regime, the `tiered` policy keeps two queues, premium and free, each running EEVDF over its own tenants. The next request comes from the queue whose tier is furthest behind its share, counted in tokens (input when picked, output as it's generated):
-
-```
-pick the non-empty tier with the smallest  tokens served / share
-share (per-tenant, default) = tier weight × active tenants in the tier
-share (per-tier)            = tier weight
-```
-
-Per-tenant keeps premium:free at 3:1 for each tenant (1,500 premium and 3,764 free tenants split 54% / 46%). Per-tier gives the tiers as a whole 75% / 25%. Share uses the active tenant count right now, so the split follows tenants joining and leaving. A tier that was idle comes back level with the other tier instead of catching up, and a rerank request that has started finishes before the scheduler switches tiers.
-
-The `lottery` policy uses the same two queues but drops the token accounting: each pick draws the premium queue with a 75% chance and the free queue with a 25% chance. If the drawn queue is empty, the other one is used.
+Under heavy load, one EEVDF queue over every tenant leans toward premium: almost every tenant is eligible, so the deadline decides, and a premium deadline is 3× smaller. We tried splitting premium and free into separate queues to keep the weight ratio exact, but we went with plain EEVDF. Free tier users don't pay their share of what they get access to, so plain EEVDF works better for the metrics that actually make a business run.
 
 ### Dispatch queue
 

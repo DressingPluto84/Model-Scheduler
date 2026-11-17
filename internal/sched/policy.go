@@ -21,8 +21,6 @@ type Env struct {
 	// admitted (and so not yet charged). Policies add it to vruntime so a
 	// tenant cannot fill the dispatch queue before its first charge lands.
 	Pending map[*tenant.Tenant]int64
-	// ActiveTenants counts, per tier, the tenants with a positive Active count.
-	ActiveTenants map[tenant.Tier]int
 }
 
 // EffectiveVRuntime is the tenant's vruntime on this model plus provisional
@@ -44,33 +42,20 @@ type Policy interface {
 	Len() int
 }
 
-// UsageObserver is a policy that wants to hear about tokens served (input
-// when a request is admitted, output as it is generated).
-type UsageObserver interface {
-	OnUsage(r *Request, input, output int, env *Env)
-}
-
 // PolicyOptions configures the policies that need it.
 type PolicyOptions struct {
-	// TierShare is how the Tiered policy splits service between tiers:
-	// TierSharePerTenant (default) or TierSharePerTier.
-	TierShare TierShare
 	// DRRTokenQuantum is the DRR quantum in tokens for embed and rerank
 	// (about one full batch). LLM DRR counts requests with a quantum of 1.
 	DRRTokenQuantum int
 }
 
 // Policies lists the policy names NewPolicy accepts.
-var Policies = []string{"fcfs", "eevdf", "tiered", "lottery", "drr"}
+var Policies = []string{"fcfs", "eevdf", "drr"}
 
 // NewPolicy returns a policy by name for a model's scheduler:
 //
 //	fcfs    first come, first served (baseline)
 //	eevdf   one EEVDF queue over all tenants
-//	tiered  a premium queue and a free queue, each EEVDF over its tenants,
-//	        with service split between them by tier weight
-//	lottery a premium queue and a free queue, each EEVDF over its tenants;
-//	        each pick draws premium with probability 0.75, free with 0.25
 //	drr     Cohere-style deficit round robin: tiers in priority order, DRR
 //	        between the tenants of a tier, FIFO within a tenant
 func NewPolicy(name string, model Model, opts PolicyOptions) (Policy, error) {
@@ -79,10 +64,6 @@ func NewPolicy(name string, model Model, opts PolicyOptions) (Policy, error) {
 		return NewFCFS(), nil
 	case "eevdf":
 		return NewEEVDF(), nil
-	case "tiered":
-		return NewTiered(opts.TierShare)
-	case "lottery":
-		return NewLottery(), nil
 	case "drr":
 		return NewDRR(model, opts.DRRTokenQuantum), nil
 	}

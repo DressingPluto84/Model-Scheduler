@@ -1,9 +1,7 @@
 package sched
 
 import (
-	"math"
 	"testing"
-	"time"
 
 	"github.com/DressingPluto84/Model-Scheduler/internal/tenant"
 )
@@ -80,49 +78,6 @@ func TestDRRRemove(t *testing.T) {
 	}
 }
 
-// tieredShare floods one premium and three free tenants with equal requests
-// and returns premium's fraction of the service.
-func tieredShare(t *testing.T, share TierShare) float64 {
-	t.Helper()
-	p, err := NewTiered(share)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h := newHarness(p, 100, 1)
-	prem := &tenant.Tenant{ID: "p", Tier: tenant.Premium}
-	frees := []*tenant.Tenant{{ID: "f1", Tier: tenant.Free}, {ID: "f2", Tier: tenant.Free}, {ID: "f3", Tier: tenant.Free}}
-	for i := 0; i < 200; i++ {
-		h.submit(prem, 100)
-		for _, f := range frees {
-			h.submit(f, 100)
-		}
-	}
-	h.lp.Run(h.lp.Now().Add(8 * time.Second)) // 80 requests of 100ms each
-	st := h.s.Stats()
-	var pt, total float64
-	for tn, n := range st.Served {
-		total += float64(n)
-		if tn == prem {
-			pt += float64(n)
-		}
-	}
-	return pt / total
-}
-
-func TestTieredPerTenantShare(t *testing.T) {
-	// One premium tenant (3) vs three free tenants (1 each): 50 / 50.
-	if got := tieredShare(t, TierSharePerTenant); math.Abs(got-0.5) > 0.05 {
-		t.Fatalf("premium share %.2f, want 0.50", got)
-	}
-}
-
-func TestTieredPerTierShare(t *testing.T) {
-	// The tiers as a whole split 3:1.
-	if got := tieredShare(t, TierSharePerTier); math.Abs(got-0.75) > 0.05 {
-		t.Fatalf("premium share %.2f, want 0.75", got)
-	}
-}
-
 func TestNewPolicyNames(t *testing.T) {
 	for _, name := range Policies {
 		if _, err := NewPolicy(name, tenant.LLM, PolicyOptions{}); err != nil {
@@ -131,21 +86,5 @@ func TestNewPolicyNames(t *testing.T) {
 	}
 	if _, err := NewPolicy("nope", tenant.LLM, PolicyOptions{}); err == nil {
 		t.Fatal("unknown policy accepted")
-	}
-}
-
-func TestLotteryPicksPremiumThreeQuarters(t *testing.T) {
-	p := NewLottery()
-	h := newHarness(p, 100, 1)
-	prem := &tenant.Tenant{ID: "p", Tier: tenant.Premium}
-	free := &tenant.Tenant{ID: "f", Tier: tenant.Free}
-	for i := 0; i < 1000; i++ {
-		h.submit(prem, 100)
-		h.submit(free, 100)
-	}
-	h.lp.Run(h.lp.Now().Add(40 * time.Second)) // 400 of the 2,000 requests
-	pv, fv := h.l.VRuntime(prem, tenant.Embed), h.l.VRuntime(free, tenant.Embed)
-	if f := pv / (pv + fv); math.Abs(f-0.75) > 0.06 {
-		t.Fatalf("premium got %.2f of service (%.0f:%.0f), want about 0.75", f, pv, fv)
 	}
 }

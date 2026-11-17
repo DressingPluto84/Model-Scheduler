@@ -19,7 +19,7 @@ import (
 type Config struct {
 	// Policy is the scheduling policy: one of sched.Policies.
 	Policy string
-	// PolicyOptions configures the tiered and drr policies.
+	// PolicyOptions configures the drr policy.
 	PolicyOptions sched.PolicyOptions
 	// DispatchDepth is the size of each scheduler's dispatch queue.
 	DispatchDepth int
@@ -51,7 +51,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		Policy:           "eevdf",
-		PolicyOptions:    sched.PolicyOptions{TierShare: sched.TierSharePerTenant, DRRTokenQuantum: 4096},
+		PolicyOptions:    sched.PolicyOptions{DRRTokenQuantum: 4096},
 		DispatchDepth:    4,
 		IdleTimeout:      30 * time.Second,
 		BillingWindow:    24 * time.Hour,
