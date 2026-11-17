@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -48,6 +49,7 @@ func main() {
 	resetFactor := flag.Float64("reset-factor", 0,
 		"reset a model's vruntimes when premium:free service per tenant exceeds this × the weight ratio (0 = off)")
 	resetMin := flag.Int64("reset-min-tokens", 20000, "tokens served on a model after a reset before the ratio is checked again")
+	samples := flag.String("samples", "", "also write every latency sample to this CSV file (plot with scripts/dist.py)")
 	backend := flag.String("backend", "sim", "GPU backend: sim or vllm")
 	drain := flag.Duration("drain", 15*time.Second, "pause between runs on vllm so the GPUs go idle")
 	vcfg := vllm.DefaultConfig()
@@ -97,4 +99,17 @@ func main() {
 		reports = append(reports, rep)
 	}
 	bench.Print(os.Stdout, reports...)
+	if *samples != "" {
+		f, err := os.Create(*samples)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := bench.WriteSamples(f, reports...); err != nil {
+			log.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Fprintf(os.Stderr, "wrote latency samples to %s\n", *samples)
+	}
 }
