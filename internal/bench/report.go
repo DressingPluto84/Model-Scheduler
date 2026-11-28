@@ -31,6 +31,11 @@ type Stats struct {
 	// target (see Workload.SLO). Client cancellations and requests still in
 	// flight at the end that could still have made it are in neither.
 	SLOMet, SLOMissed int
+	// TTFTMet / TTFTMissed count LLM requests by time to first token alone
+	// (the part the scheduler controls): counted when the first token
+	// arrives, or as a miss for a request that failed or was still waiting
+	// past the target when the run ended.
+	TTFTMet, TTFTMissed int
 
 	// LLM
 	TTFT []time.Duration
@@ -60,6 +65,9 @@ type Report struct {
 	Stats    map[statKey]*Stats
 	GPUBusy  map[tenant.Endpoint]float64 // fraction of wall time the GPU was busy
 	Resets   map[tenant.Endpoint]int     // vruntime resets per model
+	// Contested is the share of each model's picks made while two or more
+	// tenants had requests waiting (when the policy's choice could matter).
+	Contested map[tenant.Endpoint]float64
 	// TierRatio is premium tokens per premium tenant / free tokens per free
 	// tenant, per model.
 	TierRatio map[tenant.Endpoint]float64
@@ -79,6 +87,7 @@ type SleeperStats struct {
 func newReport(policy string, w Workload) *Report {
 	r := &Report{Policy: policy, Workload: w, Stats: make(map[statKey]*Stats),
 		GPUBusy: make(map[tenant.Endpoint]float64), Resets: make(map[tenant.Endpoint]int),
+		Contested: make(map[tenant.Endpoint]float64),
 		TierRatio: make(map[tenant.Endpoint]float64)}
 	for _, m := range tenant.Endpoints {
 		for _, tier := range []tenant.Tier{tenant.Premium, tenant.Free} {
@@ -126,6 +135,17 @@ func (r *Report) count(k statKey, reason sched.DoneReason) {
 	}
 }
 
+func (r *Report) ttftSLO(k statKey, met bool) {
+	if r.closed {
+		return
+	}
+	if met {
+		r.get(k).TTFTMet++
+	} else {
+		r.get(k).TTFTMissed++
+	}
+}
+
 func (r *Report) slo(k statKey, met bool) {
 	if r.closed {
 		return
@@ -158,6 +178,9 @@ func (r *Report) finish(sys *system.System, all []*tenant.Tenant, dur time.Durat
 		}
 		r.GPUBusy[m] = float64(sys.GPUStats(m).Busy) / float64(dur)
 		r.Resets[m] = st.Resets
+		if st.Picks > 0 {
+			r.Contested[m] = float64(st.Contested) / float64(st.Picks)
+		}
 	}
 	for _, t := range all {
 		for _, m := range tenant.Endpoints {
@@ -307,6 +330,12 @@ func Print(out io.Writer, reports ...*Report) {
 	}
 	gpu.print(out)
 
+	choice := newTable("Scheduler choice: share of picks with 2+ tenants waiting (when the policy matters)", policies)
+	for _, m := range tenant.Endpoints {
+		choice.row(string(m), reports, func(r *Report) string { return fmt.Sprintf("%.0f%%", 100*r.Contested[m]) })
+	}
+	choice.print(out)
+
 	if reports[0].Reset.Factor > 0 {
 		rt := newTable("Vruntime resets", policies)
 		for _, m := range tenant.Endpoints {
@@ -324,6 +353,15 @@ func Print(out io.Writer, reports ...*Report) {
 		}
 		return fmt.Sprintf("%.0f%% (%.2f/s)", 100*float64(s.SLOMet)/float64(n), float64(s.SLOMet)/w.Duration.Seconds())
 	})
+
+	perTier(fmt.Sprintf("LLM time to first token within SLO (≤ %s, the part the scheduler controls)", dur(slo.TTFT)), tenant.LLM,
+		func(s *Stats) string {
+			n := s.TTFTMet + s.TTFTMissed
+			if n == 0 {
+				return "-"
+			}
+			return fmt.Sprintf("%.0f%%", 100*float64(s.TTFTMet)/float64(n))
+		})
 
 	latency := func(ds []time.Duration) string { return dur(pct(ds, 50)) + " / " + dur(pct(ds, 99)) }
 	perTier("LLM time to first token (p50 / p99)", tenant.LLM, func(s *Stats) string { return latency(s.TTFT) })

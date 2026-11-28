@@ -46,6 +46,11 @@ type Scheduler struct {
 	// ratio tracks premium vs free service for the vruntime reset; see
 	// reset.go.
 	ratio ratioTracker
+
+	// waiting counts each tenant's requests in the policy's queue, so we can
+	// tell how often a pick was a real choice between tenants.
+	waiting          map[*tenant.Tenant]int
+	picks, contested int
 }
 
 // New builds a scheduler for model and attaches it to gpu.
@@ -67,6 +72,7 @@ func New(model Model, lp loop.Loop, l *ledger.Ledger, policy Policy, gpu GPU, di
 		gpu:           gpu,
 		dispatchDepth: dispatchDepth,
 		served:        make(map[*tenant.Tenant]int64),
+		waiting:       make(map[*tenant.Tenant]int),
 	}
 	s.ratio.reset(s.env.Active)
 	gpu.Attach(s)
@@ -109,6 +115,7 @@ func (s *Scheduler) Submit(r *Request) {
 		}
 	}
 	s.policy.Add(r, s.env, waking)
+	s.waiting[t]++
 	s.env.Active[t]++
 	s.pump()
 }
@@ -128,6 +135,7 @@ func (s *Scheduler) cancel(r *Request) {
 	switch r.state {
 	case StateQueued:
 		s.policy.Remove(r, s.env)
+		s.unwait(r.Tenant)
 		s.finish(r, Cancelled)
 	case StateDispatched:
 		for i, q := range s.dispatchQ {
@@ -154,6 +162,12 @@ func (s *Scheduler) Finish(r *Request) {
 		reason = Failed
 	}
 	s.finish(r, reason)
+}
+
+func (s *Scheduler) unwait(t *tenant.Tenant) {
+	if s.waiting[t]--; s.waiting[t] <= 0 {
+		delete(s.waiting, t)
+	}
 }
 
 // CapacityFreed is called by the GPU whenever memory frees up.
@@ -192,7 +206,12 @@ func (s *Scheduler) pump() {
 	for {
 		progressed := false
 		for len(s.dispatchQ) < s.dispatchDepth && s.policy.Len() > 0 {
+			s.picks++
+			if len(s.waiting) >= 2 {
+				s.contested++
+			}
 			r := s.policy.Pick(s.env)
+			s.unwait(r.Tenant)
 			r.state = StateDispatched
 			s.env.Pending[r.Tenant] += int64(r.InputTokens)
 			s.dispatchQ = append(s.dispatchQ, r)
@@ -216,17 +235,23 @@ func (s *Scheduler) pump() {
 // Stats is a snapshot of scheduler state.
 type Stats struct {
 	// Resets is how many times the ratio check reset this model's vruntimes.
-	Resets     int
-	Queued     int
-	Dispatched int
-	Active     map[*tenant.Tenant]int
-	Served     map[*tenant.Tenant]int64
+	Resets int
+	// Picks is how many requests the policy has picked. Contested is how
+	// many of those picks had requests from two or more tenants waiting,
+	// i.e. when the policy's choice could matter.
+	Picks, Contested int
+	Queued           int
+	Dispatched       int
+	Active           map[*tenant.Tenant]int
+	Served           map[*tenant.Tenant]int64
 }
 
 // Stats returns a copy of the scheduler's current state.
 func (s *Scheduler) Stats() Stats {
 	st := Stats{
 		Resets:     s.ratio.resets,
+		Picks:      s.picks,
+		Contested:  s.contested,
 		Queued:     s.policy.Len(),
 		Dispatched: len(s.dispatchQ),
 		Active:     make(map[*tenant.Tenant]int, len(s.env.Active)),

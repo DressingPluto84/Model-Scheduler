@@ -1,0 +1,89 @@
+5m0s on simulated GPUs · 76 premium + 172 free tenants · arrivals bursty (CV 2) · LLM median 300 in / 130 out · weights 5000:1 · seed 1 · billing off · vruntime reset off
+
+GPU busy
+           fcfs   eevdf   drr
+  embed    54%    54%     54%
+  rerank   81%    81%     81%
+  llm      100%   100%    100%
+
+Scheduler choice: share of picks with 2+ tenants waiting (when the policy matters)
+           fcfs   eevdf   drr
+  embed    1%     1%      1%
+  rerank   9%     9%      9%
+  llm      92%    92%     92%
+
+Goodput: requests within SLO (LLM TTFT ≤ 2.0s and TPOT ≤ 100ms, embed ≤ 3.0s, rerank ≤ 2.0s)
+                   fcfs             eevdf            drr
+  embed premium    100% (21.58/s)   100% (21.58/s)   100% (21.58/s)
+  embed free       100% (23.65/s)   100% (23.65/s)   100% (23.65/s)
+  rerank premium   98% (14.34/s)    100% (14.65/s)   100% (14.65/s)
+  rerank free      96% (14.30/s)    96% (14.28/s)    96% (14.20/s)
+  llm premium      0% (0.00/s)      0% (0.00/s)      0% (0.00/s)
+  llm free         0% (0.00/s)      0% (0.00/s)      0% (0.00/s)
+
+LLM time to first token within SLO (≤ 2.0s, the part the scheduler controls)
+            fcfs   eevdf   drr
+  premium   1%     82%     82%
+  free      2%     8%      2%
+
+LLM time to first token (p50 / p99)
+            fcfs            eevdf            drr
+  premium   41.9s / 62.8s   789ms / 23.6s    830ms / 21.8s
+  free      41.2s / 62.8s   63.7s / 198.1s   67.0s / 184.2s
+
+LLM inter-token latency (p50 / p99)
+            fcfs            eevdf           drr
+  premium   138ms / 282ms   139ms / 286ms   137ms / 293ms
+  free      138ms / 284ms   139ms / 288ms   136ms / 293ms
+
+Embed latency, end to end (p50 / p99)
+            fcfs          eevdf         drr
+  premium   20ms / 42ms   20ms / 42ms   20ms / 42ms
+  free      20ms / 74ms   20ms / 74ms   20ms / 74ms
+
+Rerank latency, end to end (p50 / p99)
+            fcfs          eevdf          drr
+  premium   89ms / 2.2s   89ms / 364ms   89ms / 406ms
+  free      90ms / 2.3s   90ms / 4.7s    90ms / 4.5s
+
+Premium:free tokens per tenant (weights say 5000)
+           fcfs   eevdf   drr
+  embed    2.05   2.05    2.05
+  rerank   2.22   2.22    2.22
+  llm      2.19   3.57    3.56
+
+Fairness: mean |lag| per tenant in tokens (lower is fairer)
+                   fcfs   eevdf   drr
+  embed premium    821    821     821
+  embed free       537    537     537
+  rerank premium   5298   5111    5128
+  rerank free      3545   3597    3572
+  llm premium      6990   2804    2855
+  llm free         2418   2386    2393
+
+Tier lag: mean signed lag of the whole tier in tokens (+ owed service / behind its share, − ahead)
+                   fcfs      eevdf     drr
+  embed premium    +8537     +8537     +8537
+  embed free       -7934     -7934     -7934
+  rerank premium   +45526    +41824    +41925
+  rerank free      -39342    -40599    -40613
+  llm premium      +462233   +146397   +147583
+  llm free         -310844   -322688   -335024
+
+Tokens served per tenant
+                   fcfs     eevdf    drr
+  embed premium    21750    21750    21750
+  embed free       10612    10612    10612
+  rerank premium   117163   117163   117163
+  rerank free      52791    52791    52791
+  llm premium      14391    17886    17874
+  llm free         6583     5006     5027
+
+Requests: completed / cancelled / rejected
+                   fcfs               eevdf              drr
+  embed premium    6475 / 0 / 2103    6475 / 0 / 2103    6475 / 0 / 2103
+  embed free       7096 / 0 / 2996    7096 / 0 / 2996    7096 / 0 / 2996
+  rerank premium   4394 / 0 / 1606    4394 / 0 / 1606    4394 / 0 / 1606
+  rerank free      4458 / 0 / 2051    4458 / 0 / 2051    4458 / 0 / 2051
+  llm premium      1458 / 82 / 952    1815 / 102 / 952   1814 / 102 / 952
+  llm free         1540 / 68 / 1476   1184 / 55 / 1476   1167 / 52 / 1476

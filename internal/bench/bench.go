@@ -267,6 +267,9 @@ func (run *runState) stop() {
 		}
 		if now.Sub(f.arrival) > target {
 			run.rep.slo(f.key, false)
+			if f.key.Model == tenant.LLM {
+				run.rep.ttftSLO(f.key, false)
+			}
 		}
 	}
 	run.rep.finish(run.sys, run.all, run.dur)
@@ -491,6 +494,7 @@ func (g *generator) fire() {
 							f.firstToken = at
 						}
 						g.rep.ttft(key, at.Sub(arrival))
+						g.rep.ttftSLO(key, at.Sub(arrival) <= g.w.SLO.TTFT)
 					} else {
 						g.rep.itl(key, at.Sub(last))
 					}
@@ -505,6 +509,9 @@ func (g *generator) fire() {
 					switch d.Reason {
 					case sched.Failed:
 						g.rep.slo(key, false)
+						if first.IsZero() {
+							g.rep.ttftSLO(key, false)
+						}
 					case sched.Completed:
 						met := !first.IsZero() && first.Sub(arrival) <= g.w.SLO.TTFT
 						if d.Generated > 1 {

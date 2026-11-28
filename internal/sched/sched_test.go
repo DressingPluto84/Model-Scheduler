@@ -281,3 +281,24 @@ func TestRatioResetOffByDefault(t *testing.T) {
 		t.Fatal("reset happened with Factor 0")
 	}
 }
+
+func TestContestedPicksNeedTwoTenantsWaiting(t *testing.T) {
+	h := newHarness(NewEEVDF(), 100, 1)
+	a := &tenant.Tenant{ID: "a", Tier: tenant.Free}
+	for i := 0; i < 10; i++ {
+		h.submit(a, 100)
+	}
+	h.lp.Run(h.lp.Now().Add(10 * time.Second))
+	if st := h.s.Stats(); st.Picks != 10 || st.Contested != 0 {
+		t.Fatalf("one tenant: %d picks, %d contested; want 10, 0", st.Picks, st.Contested)
+	}
+	b := &tenant.Tenant{ID: "b", Tier: tenant.Free}
+	for i := 0; i < 10; i++ {
+		h.submit(a, 100)
+		h.submit(b, 100)
+	}
+	h.lp.Run(h.lp.Now().Add(10 * time.Second))
+	if st := h.s.Stats(); st.Contested < 10 {
+		t.Fatalf("two tenants backlogged: %d contested picks, want most of the 20", st.Contested)
+	}
+}
