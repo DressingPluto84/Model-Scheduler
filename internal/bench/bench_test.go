@@ -1,6 +1,8 @@
 package bench
 
 import (
+	"math"
+	"math/rand"
 	"testing"
 	"time"
 
@@ -65,5 +67,24 @@ func TestTierLagSignUnderStrictPriority(t *testing.T) {
 	f := meanF(rep.Stats[statKey{tenant.LLM, tenant.Free}].TierLagSamples)
 	if p >= 0 || f <= 0 {
 		t.Fatalf("tier lag premium %+.0f free %+.0f, want premium < 0 < free", p, f)
+	}
+}
+
+func TestGammaGapsKeepMeanAndSetBurstiness(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	for _, b := range []float64{0.5, 2, 3} {
+		k := 1 / (b * b)
+		var sum, sq float64
+		const n = 200000
+		for i := 0; i < n; i++ {
+			x := gammaRand(rng, k) / k // mean 1
+			sum += x
+			sq += x * x
+		}
+		mean := sum / n
+		cv := math.Sqrt(sq/n-mean*mean) / mean
+		if math.Abs(mean-1) > 0.03 || math.Abs(cv-b)/b > 0.05 {
+			t.Errorf("burstiness %g: gap mean %.3f (want 1), CV %.2f (want %g)", b, mean, cv, b)
+		}
 	}
 }

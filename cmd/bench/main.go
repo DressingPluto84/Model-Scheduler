@@ -28,6 +28,7 @@ func main() {
 	flag.Float64Var(&w.HeavyIntensity, "heavy", w.HeavyIntensity, "heavy tenants' send rate as a multiple of their rate limit")
 	flag.Float64Var(&w.LightIntensity, "light", w.LightIntensity, "light tenants' send rate as a multiple of their rate limit")
 	flag.BoolVar(&w.Sleeper, "sleeper", w.Sleeper, "add a premium tenant that sleeps for the middle third of the run")
+	flag.Float64Var(&w.Burstiness, "burst", w.Burstiness, "burstiness of each tenant's arrivals: 1 = Poisson, higher = bursts with quiet gaps between (same average rate)")
 	flag.Float64Var(&w.CancelFraction, "cancel", w.CancelFraction, "fraction of LLM requests that disconnect early")
 	flag.Int64Var(&w.Seed, "seed", w.Seed, "random seed")
 	flag.IntVar(&w.RerankDocsMin, "rerank-docs-min", w.RerankDocsMin, "fewest documents per rerank request")

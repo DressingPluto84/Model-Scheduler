@@ -262,8 +262,12 @@ func Print(out io.Writer, reports ...*Report) {
 		reset = fmt.Sprintf("above %g:1 (after %d tokens)",
 			rr.Factor*tenant.TierWeights[tenant.Premium]/tenant.TierWeights[tenant.Free], rr.MinTokens)
 	}
-	fmt.Fprintf(out, "%s on %s GPUs · %d premium + %d free tenants%s · weights %g:%g · seed %d · billing %s · vruntime reset %s\n",
-		w.Duration, reports[0].Backend, w.Premium, w.Free, sleeper,
+	burst := ""
+	if w.Burstiness > 0 && w.Burstiness != 1 {
+		burst = fmt.Sprintf(" · arrivals bursty (CV %g)", w.Burstiness)
+	}
+	fmt.Fprintf(out, "%s on %s GPUs · %d premium + %d free tenants%s%s · weights %g:%g · seed %d · billing %s · vruntime reset %s\n",
+		w.Duration, reports[0].Backend, w.Premium, w.Free, sleeper, burst,
 		tenant.TierWeights[tenant.Premium], tenant.TierWeights[tenant.Free], w.Seed, billing, reset)
 
 	policies := make([]string, len(reports))

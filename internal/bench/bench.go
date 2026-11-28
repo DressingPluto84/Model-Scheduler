@@ -31,6 +31,11 @@ type Workload struct {
 	Sleeper bool
 	// CancelFraction of LLM requests disconnect after a few tokens.
 	CancelFraction float64
+	// Burstiness is the coefficient of variation of the gaps between a
+	// tenant's requests. 1 is Poisson (evenly random); above 1 the same
+	// average rate arrives in bursts separated by quiet spells, as real
+	// traffic does. Gaps are gamma distributed with shape 1 / Burstiness².
+	Burstiness float64
 
 	LLMInputMedian    float64
 	LLMMaxTokens      int
@@ -70,6 +75,7 @@ func DefaultWorkload() Workload {
 		LightIntensity:    0.3,
 		Sleeper:           true,
 		CancelFraction:    0.05,
+		Burstiness:        1,
 		LLMInputMedian:    300,
 		LLMMaxTokens:      512,
 		LLMOutputMedian:   200,
@@ -283,7 +289,14 @@ func (g *generator) scheduleNext() {
 	if g.rate <= 0 {
 		return
 	}
-	gap := time.Duration(g.rng.ExpFloat64() / g.rate * float64(time.Second))
+	mean := 1 / g.rate // seconds
+	var gap time.Duration
+	if b := g.w.Burstiness; b <= 0 || b == 1 {
+		gap = time.Duration(g.rng.ExpFloat64() * mean * float64(time.Second))
+	} else {
+		k := 1 / (b * b) // gamma shape; mean k × scale = mean, CV 1/√k = b
+		gap = time.Duration(gammaRand(g.rng, k) / k * mean * float64(time.Second))
+	}
 	if !g.lp.Now().Add(gap).Before(g.end) {
 		return
 	}
@@ -294,6 +307,28 @@ func (g *generator) scheduleNext() {
 		g.fire()
 		g.scheduleNext()
 	})
+}
+
+// gammaRand draws from a gamma distribution with shape k and scale 1
+// (Marsaglia and Tsang; for k < 1, boosted from k + 1).
+func gammaRand(rng *rand.Rand, k float64) float64 {
+	if k < 1 {
+		return gammaRand(rng, k+1) * math.Pow(rng.Float64(), 1/k)
+	}
+	d := k - 1.0/3
+	c := 1 / math.Sqrt(9*d)
+	for {
+		x := rng.NormFloat64()
+		v := 1 + c*x
+		if v <= 0 {
+			continue
+		}
+		v = v * v * v
+		u := rng.Float64()
+		if math.Log(u) < 0.5*x*x+d-d*v+d*math.Log(v) {
+			return d * v
+		}
+	}
 }
 
 func (g *generator) asleep() bool {
