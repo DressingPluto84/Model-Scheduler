@@ -5,25 +5,22 @@ import "github.com/DressingPluto84/Model-Scheduler/internal/tenant"
 // tierOrder lists the tiers from highest priority to lowest.
 var tierOrder = []tenant.Tier{tenant.Premium, tenant.Free}
 
-// DRR is deficit round robin as described in Cohere's "serving fairness"
-// post (https://cohere.com/blog/serving-fairness):
+// DRR is deficit round robin with tiers in strict priority order:
 //
-//  1. Tier: higher tiers are considered first. The post says higher tiers get
-//     "greater processing priority" and lower tiers are served "as capacity
-//     allows", so this implementation serves free only when no premium
-//     request is queued.
+//  1. Tier: higher tiers are considered first. Free is served only when no
+//     premium request is queued.
 //  2. Tenant: within a tier, tenants take turns. On its turn a tenant's
 //     deficit grows by one quantum, and it dispatches requests while the
 //     deficit covers the next request's cost. Then the turn passes on.
 //  3. Within a tenant: arrival order (our requests carry no priority or
 //     client deadline).
 //
-// Cost and quantum depend on the model, as in the post: LLM (streaming) costs
-// 1 per request with a quantum of 1, so tenants rotate after about one
-// request each. Embed and rerank cost their input tokens, with a quantum of
-// about one full batch. A tenant whose queue empties leaves the rotation and
-// loses its leftover deficit (standard DRR; the post doesn't say). Tenant
-// weights play no part, only the tier order.
+// Cost and quantum depend on the model: LLM (streaming) costs 1 per request
+// with a quantum of 1, so tenants rotate after about one request each. Embed
+// and rerank cost their input tokens, with a quantum of about one full batch.
+// A tenant whose queue empties leaves the rotation and loses its leftover
+// deficit, as in standard DRR. Tenant weights play no part, only the tier
+// order.
 type DRR struct {
 	tokenCost bool
 	quantum   float64

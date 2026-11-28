@@ -56,7 +56,7 @@ var Policies = []string{"fcfs", "eevdf", "drr"}
 //
 //	fcfs    first come, first served (baseline)
 //	eevdf   one EEVDF queue over all tenants
-//	drr     Cohere-style deficit round robin: tiers in priority order, DRR
+//	drr     deficit round robin: tiers in strict priority order, DRR
 //	        between the tenants of a tier, FIFO within a tenant
 func NewPolicy(name string, model Model, opts PolicyOptions) (Policy, error) {
 	switch name {

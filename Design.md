@@ -118,7 +118,7 @@ If a client disconnects, the rest of the job is aborted off of the GPU, and the 
 - Hitting limits for token usage and num requests
 - Hitting limits for request sizes
 - Client comes alive after sleep
-- Benchmark against FCFS and against deficit round robin as described in Cohere's [serving fairness](https://cohere.com/blog/serving-fairness) post (`drr`): higher tiers are served first, DRR between the tenants of a tier (LLM costs 1 per request with a quantum of 1; embed and rerank cost their input tokens with a quantum of about one batch), and FIFO within a tenant. The post doesn't say whether lower tiers get a guaranteed share, so `drr` uses strict tier priority; under sustained overload that leaves free almost nothing. Open-source schedulers may be added later.
+- Benchmark against FCFS and against deficit round robin (`drr`): higher tiers are served first, DRR between the tenants of a tier (LLM costs 1 per request with a quantum of 1; embed and rerank cost their input tokens with a quantum of about one batch), and FIFO within a tenant. Tiers are in strict priority, so under sustained overload free gets almost nothing. Open-source schedulers may be added later.
 
 ### Benchmark metrics
 

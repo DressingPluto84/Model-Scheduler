@@ -17,6 +17,7 @@
 - Plain EEVDF, since free users don't pay their share — kept.
 - Random 0–50% cut to premium deadlines (`eevdfr`) — removed.
 - Random ineligible premium made eligible each pick (`eevdfre`) — removed.
+- Premium-tenant competition stretches EEVDF's tail vs DRR — confirmed: about 1.2× p99 under overload, up to 2×.
 
 ## Rerank
 - Chunk pairs into groups of 3 — superseded.
@@ -24,13 +25,23 @@
 - Whole rerank as one job — kept.
 - Large rerank inputs cause head-of-line blocking — confirmed.
 
+## Workload
+- Bursty arrivals (`-burst`) — kept.
+- Zipf tenant skew with quotas that grow with traffic (`-skew`) — kept.
+- Production prompt and output lengths (`-llm-input-median`, `-llm-output-median`) — kept.
+- Matrix of burst × skew × prompt length at heavy load (`scripts/matrix.py`) — kept.
+- Client timeouts and short surges instead of unbounded overload — next.
+
 ## Metrics and baselines
-- Cohere DRR baseline — kept.
+- DRR with strict tier priority as a baseline — kept.
 - Backlog shedding — removed.
 - Jain index — removed for lag.
 - Goodput against SLOs — kept.
 - Signed per-tier lag — kept.
 - Full latency distributions (`-samples`, `scripts/dist.py`) — kept.
+- Share of picks with 2+ tenants waiting — kept.
+- First token within SLO, tracked apart from goodput — kept.
+- Multiple seeds before trusting tail differences — kept.
 
 ## GPUs
 - vLLM on one RunPod L40S, 70/10/10 split — done.
