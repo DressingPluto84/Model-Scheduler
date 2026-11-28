@@ -57,11 +57,11 @@ func (s *System) gateway(tenantID string, ep tenant.Endpoint) (*tenant.Tenant, *
 		return nil, &Error{Status: http.StatusUnauthorized, Code: CodeUnknownTenant,
 			Message: fmt.Sprintf("unknown tenant %q", tenantID)}
 	}
-	limit := tenant.RateLimitPerMinute(t.Tier, ep)
+	limit := t.RateLimit(ep)
 	key := ratelimit.Key{Tenant: t.ID, Endpoint: string(ep)}
 	if ok, retry := s.limiter.Allow(key, limit, s.loop.Now()); !ok {
 		return nil, &Error{Status: http.StatusTooManyRequests, Code: CodeRateLimited, RetryAfter: retry,
-			Message: fmt.Sprintf("rate limit exceeded: %s tier allows %d /%s requests per minute", t.Tier, limit, ep)}
+			Message: fmt.Sprintf("rate limit exceeded: %s allows %d /%s requests per minute", t.ID, limit, ep)}
 	}
 	return t, nil
 }

@@ -88,3 +88,28 @@ func TestGammaGapsKeepMeanAndSetBurstiness(t *testing.T) {
 		}
 	}
 }
+
+func TestSkewKeepsAverageAndConcentratesTraffic(t *testing.T) {
+	w := DefaultWorkload()
+	w.Skew = 1
+	xs := intensities(w, 100)
+	var sum, top float64
+	for i, x := range xs {
+		sum += x
+		if i < 10 {
+			top += x
+		}
+	}
+	mean := w.HeavyFraction*w.HeavyIntensity + (1-w.HeavyFraction)*w.LightIntensity
+	if math.Abs(sum/100-mean) > 1e-9 {
+		t.Fatalf("average intensity %.3f, want %.3f", sum/100, mean)
+	}
+	// Zipf(1) over 100 tenants: the top 10 send about 56% of the traffic.
+	if share := top / sum; share < 0.5 || share > 0.62 {
+		t.Fatalf("top 10%% of tenants send %.0f%%, want about 56%%", 100*share)
+	}
+	big := &tenant.Tenant{Tier: tenant.Premium, QuotaScale: xs[0]}
+	if got, base := big.RateLimit(tenant.LLM), tenant.RateLimitPerMinute(tenant.Premium, tenant.LLM); got <= base {
+		t.Fatalf("largest tenant's limit %d, want above the tier's %d", got, base)
+	}
+}

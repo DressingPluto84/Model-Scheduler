@@ -263,8 +263,15 @@ func Print(out io.Writer, reports ...*Report) {
 			rr.Factor*tenant.TierWeights[tenant.Premium]/tenant.TierWeights[tenant.Free], rr.MinTokens)
 	}
 	burst := ""
+	if w.Skew > 0 {
+		burst += fmt.Sprintf(" · Zipf skew %g", w.Skew)
+	}
 	if w.Burstiness > 0 && w.Burstiness != 1 {
-		burst = fmt.Sprintf(" · arrivals bursty (CV %g)", w.Burstiness)
+		burst += fmt.Sprintf(" · arrivals bursty (CV %g)", w.Burstiness)
+	}
+	def := DefaultWorkload()
+	if w.LLMInputMedian != def.LLMInputMedian || w.LLMOutputMedian != def.LLMOutputMedian {
+		burst += fmt.Sprintf(" · LLM median %g in / %g out", w.LLMInputMedian, w.LLMOutputMedian)
 	}
 	fmt.Fprintf(out, "%s on %s GPUs · %d premium + %d free tenants%s%s · weights %g:%g · seed %d · billing %s · vruntime reset %s\n",
 		w.Duration, reports[0].Backend, w.Premium, w.Free, sleeper, burst,

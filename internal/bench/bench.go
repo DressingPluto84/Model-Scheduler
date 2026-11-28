@@ -31,6 +31,13 @@ type Workload struct {
 	Sleeper bool
 	// CancelFraction of LLM requests disconnect after a few tokens.
 	CancelFraction float64
+	// Skew, when above 0, replaces the heavy/light split with a Zipf spread
+	// of traffic across each tier's tenants, as in production where a few
+	// large customers send most requests: the tenant ranked i sends in
+	// proportion to 1 / i^Skew, scaled so the tier's average intensity stays
+	// the same. Each tenant's quota grows with its traffic, so large tenants
+	// aren't simply rate limited away.
+	Skew float64
 	// Burstiness is the coefficient of variation of the gaps between a
 	// tenant's requests. 1 is Poisson (evenly random); above 1 the same
 	// average rate arrives in bursts separated by quiet spells, as real
@@ -162,11 +169,16 @@ func makeTenants(w Workload) ([]*simTenant, []*tenant.Tenant) {
 		tenants = append(tenants, &simTenant{t: t, intensity: intensity, sleeper: sleeper})
 		all = append(all, t)
 	}
-	for i := 0; i < w.Premium; i++ {
-		add(fmt.Sprintf("premium-%02d", i), tenant.Premium, intensity(w, i, w.Premium), false)
+	for i, x := range intensities(w, w.Premium) {
+		add(fmt.Sprintf("premium-%02d", i), tenant.Premium, x, false)
 	}
-	for i := 0; i < w.Free; i++ {
-		add(fmt.Sprintf("free-%02d", i), tenant.Free, intensity(w, i, w.Free), false)
+	for i, x := range intensities(w, w.Free) {
+		add(fmt.Sprintf("free-%02d", i), tenant.Free, x, false)
+	}
+	for _, st := range tenants {
+		if w.Skew > 0 && st.intensity > 1 {
+			st.t.QuotaScale = st.intensity
+		}
 	}
 	if w.Sleeper {
 		add("premium-sleeper", tenant.Premium, w.HeavyIntensity, true)
@@ -262,6 +274,28 @@ func (run *runState) stop() {
 	for h := range run.handles {
 		h.Cancel()
 	}
+}
+
+// intensities returns the send rate of each of a tier's n tenants as a
+// multiple of the tier's rate limit (see Workload.Skew).
+func intensities(w Workload, n int) []float64 {
+	out := make([]float64, n)
+	if w.Skew <= 0 {
+		for i := range out {
+			out[i] = intensity(w, i, n)
+		}
+		return out
+	}
+	mean := w.HeavyFraction*w.HeavyIntensity + (1-w.HeavyFraction)*w.LightIntensity
+	var sum float64
+	for i := range out {
+		out[i] = 1 / math.Pow(float64(i+1), w.Skew)
+		sum += out[i]
+	}
+	for i := range out {
+		out[i] *= mean * float64(n) / sum
+	}
+	return out
 }
 
 func intensity(w Workload, i, n int) float64 {

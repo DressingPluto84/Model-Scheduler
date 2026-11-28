@@ -5,6 +5,7 @@ package tenant
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 )
 
@@ -32,6 +33,19 @@ var Endpoints = []Endpoint{Embed, Rerank, LLM}
 type Tenant struct {
 	ID   string `json:"id"`
 	Tier Tier   `json:"tier"`
+	// QuotaScale multiplies the tier's rate limits for this tenant, as large
+	// customers get larger quotas. 0 or 1 means the tier default.
+	QuotaScale float64 `json:"quota_scale,omitempty"`
+}
+
+// RateLimit is this tenant's per-minute request limit on ep: the tier's
+// limit, scaled up by QuotaScale.
+func (t *Tenant) RateLimit(ep Endpoint) int {
+	base := RateLimitPerMinute(t.Tier, ep)
+	if t.QuotaScale <= 1 {
+		return base
+	}
+	return int(math.Ceil(float64(base) * t.QuotaScale))
 }
 
 // TierWeights are the EEVDF weights per tier: 3 for premium, 1 for free.
