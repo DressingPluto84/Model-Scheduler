@@ -24,7 +24,8 @@ type Stats struct {
 	Submitted int
 	Rejected  map[string]int // by error code
 	Completed int
-	Cancelled int
+	Cancelled int // by the client, including timeouts
+	TimedOut  int // the client gave up waiting (see Workload.ClientTimeout)
 	Failed    int // backend errors
 
 	// SLOMet / SLOMissed count requests that met or missed their latency
@@ -132,6 +133,19 @@ func (r *Report) count(k statKey, reason sched.DoneReason) {
 		s.Cancelled++
 	case sched.Failed:
 		s.Failed++
+	}
+}
+
+// timedOut records a request the client gave up on: an SLO miss (and a time
+// to first token miss for the LLM).
+func (r *Report) timedOut(k statKey) {
+	if r.closed {
+		return
+	}
+	r.get(k).TimedOut++
+	r.slo(k, false)
+	if k.Model == tenant.LLM {
+		r.ttftSLO(k, false)
 	}
 }
 
@@ -289,6 +303,9 @@ func Print(out io.Writer, reports ...*Report) {
 	if w.Skew > 0 {
 		burst += fmt.Sprintf(" · Zipf skew %g", w.Skew)
 	}
+	if w.ClientTimeout > 0 {
+		burst += fmt.Sprintf(" · clients give up after %s", dur(w.ClientTimeout))
+	}
 	if w.Burstiness > 0 && w.Burstiness != 1 {
 		burst += fmt.Sprintf(" · arrivals bursty (CV %g)", w.Burstiness)
 	}
@@ -396,12 +413,12 @@ func Print(out io.Writer, reports ...*Report) {
 		}
 		return fmt.Sprintf("%d", s.ServedTokens/int64(s.Tenants))
 	})
-	perModelTier("Requests: completed / cancelled / rejected", func(s *Stats) string {
+	perModelTier("Requests: completed / cancelled / timed out / rejected", func(s *Stats) string {
 		rejected := 0
 		for _, n := range s.Rejected {
 			rejected += n
 		}
-		return fmt.Sprintf("%d / %d / %d", s.Completed, s.Cancelled, rejected)
+		return fmt.Sprintf("%d / %d / %d / %d", s.Completed, s.Cancelled-s.TimedOut, s.TimedOut, rejected)
 	})
 
 	failed := false

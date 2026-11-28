@@ -31,6 +31,11 @@ type Workload struct {
 	Sleeper bool
 	// CancelFraction of LLM requests disconnect after a few tokens.
 	CancelFraction float64
+	// ClientTimeout is how long a client waits before giving up: for its
+	// first token (LLM) or its result (embed, rerank). A request that times
+	// out is cancelled and counts as an SLO miss. 0 means clients wait
+	// forever.
+	ClientTimeout time.Duration
 	// Skew, when above 0, replaces the heavy/light split with a Zipf spread
 	// of traffic across each tier's tenants, as in production where a few
 	// large customers send most requests: the tenant ranked i sends in
@@ -410,8 +415,24 @@ func (g *generator) track(h *system.Handle, key statKey) *inflight {
 	f := &inflight{key: key, arrival: g.lp.Now()}
 	if h != nil {
 		g.run.handles[h] = f
+		g.armTimeout(h, f)
 	}
 	return f
+}
+
+// armTimeout makes the client give up on h if it still has no first token
+// (LLM) or result (embed, rerank) after Workload.ClientTimeout.
+func (g *generator) armTimeout(h *system.Handle, f *inflight) {
+	if g.w.ClientTimeout <= 0 {
+		return
+	}
+	g.lp.After(g.w.ClientTimeout, func() {
+		if _, live := g.run.handles[h]; !live || !f.firstToken.IsZero() || g.rep.closed {
+			return
+		}
+		g.rep.timedOut(f.key)
+		h.Cancel()
+	})
 }
 
 // e2eSLO records whether a finished embed or rerank request met its target.

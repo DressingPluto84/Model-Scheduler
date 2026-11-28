@@ -32,6 +32,7 @@ func main() {
 	flag.Float64Var(&w.LLMInputMedian, "llm-input-median", w.LLMInputMedian, "median LLM prompt length in tokens")
 	flag.Float64Var(&w.LLMOutputMedian, "llm-output-median", w.LLMOutputMedian, "median LLM output length in tokens")
 	flag.Float64Var(&w.Burstiness, "burst", w.Burstiness, "burstiness of each tenant's arrivals: 1 = Poisson, higher = bursts with quiet gaps between (same average rate)")
+	flag.DurationVar(&w.ClientTimeout, "client-timeout", w.ClientTimeout, "clients give up after this long without a first token (LLM) or result (embed, rerank); 0 = wait forever")
 	flag.Float64Var(&w.CancelFraction, "cancel", w.CancelFraction, "fraction of LLM requests that disconnect early")
 	flag.Int64Var(&w.Seed, "seed", w.Seed, "random seed")
 	flag.IntVar(&w.RerankDocsMin, "rerank-docs-min", w.RerankDocsMin, "fewest documents per rerank request")

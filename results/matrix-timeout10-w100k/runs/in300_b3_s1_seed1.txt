@@ -1,0 +1,89 @@
+5m0s on simulated GPUs · 76 premium + 172 free tenants · Zipf skew 1 · clients give up after 10.0s · arrivals bursty (CV 3) · LLM median 300 in / 130 out · weights 100000:1 · seed 1 · billing off · vruntime reset off
+
+GPU busy
+           fcfs   eevdf   drr
+  embed    49%    49%     49%
+  rerank   75%    75%     75%
+  llm      100%   100%    100%
+
+Scheduler choice: share of picks with 2+ tenants waiting (when the policy matters)
+           fcfs   eevdf   drr
+  embed    4%     4%      4%
+  rerank   24%    22%     22%
+  llm      95%    91%     92%
+
+Goodput: requests within SLO (LLM TTFT ≤ 2.0s and TPOT ≤ 100ms, embed ≤ 3.0s, rerank ≤ 2.0s)
+                   fcfs             eevdf            drr
+  embed premium    100% (25.65/s)   100% (25.65/s)   100% (25.65/s)
+  embed free       100% (28.50/s)   100% (28.50/s)   100% (28.50/s)
+  rerank premium   93% (15.29/s)    100% (16.42/s)   100% (16.43/s)
+  rerank free      88% (15.65/s)    89% (15.78/s)    88% (15.64/s)
+  llm premium      0% (0.00/s)      0% (0.00/s)      0% (0.00/s)
+  llm free         0% (0.00/s)      0% (0.00/s)      0% (0.00/s)
+
+LLM time to first token within SLO (≤ 2.0s, the part the scheduler controls)
+            fcfs   eevdf   drr
+  premium   0%     74%     71%
+  free      0%     21%     10%
+
+LLM time to first token (p50 / p99)
+            fcfs           eevdf          drr
+  premium   9.5s / 10.0s   848ms / 9.3s   949ms / 9.5s
+  free      9.5s / 10.0s   2.2s / 9.8s    4.5s / 9.9s
+
+LLM inter-token latency (p50 / p99)
+            fcfs            eevdf           drr
+  premium   150ms / 412ms   137ms / 288ms   139ms / 299ms
+  free      150ms / 428ms   137ms / 288ms   138ms / 296ms
+
+Embed latency, end to end (p50 / p99)
+            fcfs           eevdf          drr
+  premium   27ms / 275ms   27ms / 154ms   27ms / 154ms
+  free      26ms / 344ms   26ms / 367ms   26ms / 409ms
+
+Rerank latency, end to end (p50 / p99)
+            fcfs           eevdf          drr
+  premium   119ms / 5.8s   116ms / 1.4s   116ms / 1.3s
+  free      116ms / 5.8s   115ms / 8.8s   115ms / 9.0s
+
+Premium:free tokens per tenant (weights say 100000)
+           fcfs   eevdf   drr
+  embed    2.04   2.04    2.04
+  rerank   2.10   2.13    2.13
+  llm      1.89   3.99    4.01
+
+Fairness: mean |lag| per tenant in tokens (lower is fairer)
+                   fcfs    eevdf   drr
+  embed premium    1696    1696    1696
+  embed free       1413    1413    1413
+  rerank premium   11431   10416   10475
+  rerank free      7220    6889    6806
+  llm premium      8367    7240    7113
+  llm free         5837    2277    2699
+
+Tier lag: mean signed lag of the whole tier in tokens (+ owed service / behind its share, − ahead)
+                   fcfs      eevdf     drr
+  embed premium    +9908     +9908     +9908
+  embed free       -12832    -12832    -12832
+  rerank premium   +70361    +51068    +51438
+  rerank free      -66589    -65350    -65541
+  llm premium      +138784   -16171    -13381
+  llm free         -397507   -131984   -160744
+
+Tokens served per tenant
+                   fcfs     eevdf    drr
+  embed premium    26032    26032    26032
+  embed free       12765    12765    12765
+  rerank premium   130534   130534   130534
+  rerank free      62242    61206    61416
+  llm premium      16005    18721    18843
+  llm free         8468     4693     4701
+
+Requests: completed / cancelled / timed out / rejected
+                   fcfs                      eevdf                     drr
+  embed premium    7694 / 0 / 0 / 1543       7694 / 0 / 0 / 1543       7694 / 0 / 0 / 1543
+  embed free       8550 / 0 / 0 / 1969       8550 / 0 / 0 / 1969       8550 / 0 / 0 / 1969
+  rerank premium   4934 / 0 / 0 / 1001       4934 / 0 / 0 / 1001       4934 / 0 / 0 / 1001
+  rerank free      5310 / 0 / 0 / 1661       5229 / 0 / 81 / 1661      5240 / 0 / 70 / 1661
+  llm premium      1167 / 63 / 933 / 674     1874 / 104 / 209 / 674    1875 / 110 / 202 / 674
+  llm free         1457 / 75 / 1095 / 1413   1126 / 58 / 1504 / 1413   1100 / 56 / 1527 / 1413

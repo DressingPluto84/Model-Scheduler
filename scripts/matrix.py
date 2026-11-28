@@ -3,6 +3,9 @@
     python3 scripts/matrix.py run  results/matrix     # runs every cell, writes summary.csv and charts
     python3 scripts/matrix.py plot results/matrix     # redraws the charts from summary.csv
 
+Extra flags after the directory go to every bench run, e.g.
+    python3 scripts/matrix.py run results/matrix-timeout10 -client-timeout 10s
+
 Axes: burstiness x tenant skew x LLM prompt length, each policy, several
 seeds. Each prompt length runs at its own heavy load, about twice its peak
 hour (where premium p99 time to first token is a few seconds), so the LLM
@@ -30,12 +33,13 @@ SKEWS = [0, 1, 1.5]
 LOADS = {300: (76, 172), 1000: (40, 90), 2000: (26, 58)}
 SEEDS = [1, 2, 3]
 POLICIES = ["fcfs", "eevdf", "drr"]
+EXTRA = []  # extra bench flags from the command line
 COMMON = ["-sleeper=false", "-duration", "5m", "-llm-output-median", "130",
           "-premium-weight", "5000", "-free-weight", "1", "-policies", ",".join(POLICIES)]
 PCTS = [50, 90, 99, 99.9]
 
 FIELDS = ["input_median", "burst", "skew", "seed", "premium", "free", "policy", "tier",
-          "contested", "ttft_slo", "goodput", "n"] + [f"p{p:g}" for p in PCTS]
+          "contested", "ttft_slo", "goodput", "timed_out", "n"] + [f"p{p:g}" for p in PCTS]
 
 
 def run_cell(out, bench, inp, burst, skew, seed):
@@ -45,7 +49,7 @@ def run_cell(out, bench, inp, burst, skew, seed):
     if txt.exists() and "Requests:" in txt.read_text():
         return name, None  # already done
     args = [str(bench), "-llm-input-median", str(inp), "-burst", str(burst), "-skew", str(skew),
-            "-seed", str(seed), "-premium", str(prem), "-free", str(free), "-samples", str(samples)] + COMMON
+            "-seed", str(seed), "-premium", str(prem), "-free", str(free), "-samples", str(samples)] + COMMON + EXTRA
     with open(txt, "w") as f:
         subprocess.run(args, stdout=f, stderr=subprocess.DEVNULL, check=True)
     rows = summarize(txt, samples, inp, burst, skew, seed, prem, free)
@@ -59,7 +63,7 @@ def summarize(txt, samples, inp, burst, skew, seed, prem, free):
         for r in csv.DictReader(f):
             if r["model"] == "llm" and r["metric"] == "ttft":
                 ttft[(r["policy"], r["tier"])].append(float(r["ms"]))
-    goodput, ttft_slo, contested = {}, {}, {}
+    goodput, ttft_slo, contested, timed_out = {}, {}, {}, {}
     section = ""
     for line in txt.read_text().splitlines():
         if line and not line.startswith(" "):
@@ -74,6 +78,12 @@ def summarize(txt, samples, inp, burst, skew, seed, prem, free):
             m = re.match(r"\s+(premium|free)\s", line)
             if m:
                 ttft_slo.update({(p, m.group(1)): int(g) for p, g in zip(POLICIES, pcts)})
+        elif section.startswith("Requests:"):
+            m = re.match(r"\s+llm (premium|free)\s+(.*)", line)
+            if m:
+                for p, cell in zip(POLICIES, re.split(r"\s{2,}", m.group(2).strip())):
+                    parts = [int(x) for x in cell.split(" / ")]
+                    timed_out[(p, m.group(1))] = parts[2] if len(parts) == 4 else 0
         elif section.startswith("Scheduler choice"):
             if re.match(r"\s+llm\s", line):
                 contested.update({p: int(g) for p, g in zip(POLICIES, pcts)})
@@ -83,7 +93,8 @@ def summarize(txt, samples, inp, burst, skew, seed, prem, free):
             v = np.array(ttft[(pol, tier)])
             row = dict(input_median=inp, burst=burst, skew=skew, seed=seed, premium=prem, free=free,
                        policy=pol, tier=tier, contested=contested.get(pol, ""),
-                       ttft_slo=ttft_slo.get((pol, tier), ""), goodput=goodput.get((pol, tier), ""), n=len(v))
+                       ttft_slo=ttft_slo.get((pol, tier), ""), goodput=goodput.get((pol, tier), ""),
+                       timed_out=timed_out.get((pol, tier), ""), n=len(v))
             for p in PCTS:
                 row[f"p{p:g}"] = round(float(np.percentile(v, p)), 1) if len(v) else ""
             rows.append(row)
@@ -212,6 +223,7 @@ def plot(out):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3 or sys.argv[1] not in ("run", "plot"):
+    if len(sys.argv) < 3 or sys.argv[1] not in ("run", "plot"):
         sys.exit(__doc__)
+    EXTRA = sys.argv[3:]
     {"run": run, "plot": plot}[sys.argv[1]](sys.argv[2])

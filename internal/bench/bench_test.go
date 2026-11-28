@@ -113,3 +113,28 @@ func TestSkewKeepsAverageAndConcentratesTraffic(t *testing.T) {
 		t.Fatalf("largest tenant's limit %d, want above the tier's %d", got, base)
 	}
 }
+
+func TestClientTimeoutCapsWaiting(t *testing.T) {
+	cfg := system.DefaultConfig()
+	cfg.BillingEnabled = false
+	cfg.Policy = "fcfs"
+	w := DefaultWorkload()
+	w.Duration = 2 * time.Minute
+	w.Premium, w.Free, w.Sleeper = 64, 144, false // heavily overloaded LLM
+	w.ClientTimeout = 10 * time.Second
+	rep, err := Run(cfg, w, Backend{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tier := range []tenant.Tier{tenant.Premium, tenant.Free} {
+		s := rep.Stats[statKey{tenant.LLM, tier}]
+		if s.TimedOut == 0 {
+			t.Errorf("%s: no LLM request timed out under heavy overload", tier)
+		}
+		for _, d := range s.TTFT {
+			if d > w.ClientTimeout {
+				t.Fatalf("%s: first token after %s, past the %s client timeout", tier, d, w.ClientTimeout)
+			}
+		}
+	}
+}
